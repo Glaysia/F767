@@ -2,6 +2,8 @@
 import socket
 import struct
 import sys
+import time
+from collections import deque
 from typing import Tuple
 
 import matplotlib.pyplot as plt
@@ -20,6 +22,7 @@ ADC_FULL_SCALE = 1 << SAMPLE_BITS
 
 # Plot window
 WINDOW_SAMPLES = 1024  # per channel
+THROUGHPUT_WINDOW_S = 1.0
 
 HEADER_FMT = "<IQHHHH"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
@@ -68,6 +71,7 @@ def main() -> None:
     last_seq = None
     current_full_scale = ADC_FULL_SCALE
     warned_sample_bits = False
+    throughput_log = deque()
 
     fig, ax = plt.subplots()
     lines = [
@@ -77,6 +81,14 @@ def main() -> None:
     ax.set_ylabel("ADC code")
     ax.set_ylim(0, current_full_scale)
     ax.legend(loc="upper right")
+    throughput_text = ax.text(
+        0.98,
+        0.98,
+        "ETH --.- Mbps",
+        ha="right",
+        va="top",
+        transform=ax.transAxes,
+    )
 
     def update_plot():
         for i, ln in enumerate(lines):
@@ -102,6 +114,14 @@ def main() -> None:
             if hdr["channels"] != CHANNEL_COUNT:
                 print(f"unexpected channel count {hdr['channels']}", file=sys.stderr)
                 continue
+
+            now = time.monotonic()
+            throughput_log.append((now, len(pkt)))
+            while throughput_log and (now - throughput_log[0][0]) > THROUGHPUT_WINDOW_S:
+                throughput_log.popleft()
+            bytes_in_window = sum(sz for _, sz in throughput_log)
+            mbps = (bytes_in_window * 8.0) / THROUGHPUT_WINDOW_S / 1e6
+            throughput_text.set_text(f"ETH {mbps:4.1f} Mbps")
 
             if hdr["sample_bits"] != SAMPLE_BITS and not warned_sample_bits:
                 print(f"unexpected sample bits {hdr['sample_bits']}", file=sys.stderr)
