@@ -5,68 +5,52 @@ enum
     kEthStreamSamplesPerFrame = kEthStreamChannels
 };
 
-static struct EthStream g_eth_stream;
+static EthStream g_eth_stream;
 
-static void EthStreamFlush(struct EthStream *stream)
+EthStream &EthStream::Instance(void)
 {
-    if (stream == NULL)
-    {
-        return;
-    }
-
-    ++stream->packet_sequence;
-    stream->queued_frames = 0;
+    return g_eth_stream;
 }
 
-struct EthStream *EthStreamGet(void)
+void EthStream::Reset(void)
 {
-    return &g_eth_stream;
-}
-
-void EthStreamReset(struct EthStream *stream)
-{
-    if (stream == NULL)
-    {
-        return;
-    }
-
-    stream->packet_sequence = 0U;
-    stream->queued_frames = 0U;
+    packet_sequence = 0U;
+    queued_frames = 0U;
 
     for (size_t i = 0; i < kEthStreamFrameCapacity * kEthStreamSamplesPerFrame; ++i)
     {
-        stream->frame_buffer[i] = 0U;
+        frame_buffer[i] = 0U;
     }
 }
 
-void EthStreamQueueSamples(struct EthStream *stream, const uint16_t samples[kEthStreamChannels])
+void EthStream::QueueSamples(const uint16_t samples[kEthStreamChannels])
 {
-    if ((stream == NULL) || (samples == NULL))
+    if (samples == NULL)
     {
         return;
     }
 
-    if (stream->queued_frames >= kEthStreamFrameCapacity)
+    if (queued_frames >= kEthStreamFrameCapacity)
     {
-        EthStreamFlush(stream);
+        Flush();
     }
 
-    size_t base_index = stream->queued_frames * kEthStreamSamplesPerFrame;
+    size_t base_index = queued_frames * kEthStreamSamplesPerFrame;
     for (size_t i = 0; i < kEthStreamSamplesPerFrame; ++i)
     {
-        stream->frame_buffer[base_index + i] = samples[i];
+        frame_buffer[base_index + i] = samples[i];
     }
 
-    ++stream->queued_frames;
+    ++queued_frames;
 }
 
-size_t EthStreamBytesReady(const struct EthStream *stream)
+size_t EthStream::BytesReady(void) const
 {
-    if (stream == NULL)
-    {
-        return 0U;
-    }
-
-    return stream->queued_frames * kEthStreamSamplesPerFrame * sizeof(uint16_t);
+    return queued_frames * kEthStreamSamplesPerFrame * sizeof(uint16_t);
 }
 
+void EthStream::Flush(void)
+{
+    ++packet_sequence;
+    queued_frames = 0U;
+}

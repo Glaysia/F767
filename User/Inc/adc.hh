@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef __cplusplus
+#error "adc.hh requires a C++ translation unit"
+#endif
+
 #include <stdint.h>
 
 enum
@@ -12,14 +16,8 @@ struct AdcSampleTriple
     uint16_t values[kAdcSampleChannels];
 };
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+
 
 void AdcInit(void);
 struct AdcSampleTriple AdcGetLatest(void);
-
-#ifdef __cplusplus
-}
-#endif
 

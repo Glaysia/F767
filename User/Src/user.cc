@@ -24,13 +24,13 @@ int __io_putchar(int ch)
 
 void UserCppInit(void)
 {
-    EthStreamReset(EthStreamGet());
+    EthStream::Instance().Reset();
 }
 
 void UserCppProcess(void)
 {
     uint16_t idle_samples[kEthStreamChannels] = {0U};
-    EthStreamQueueSamples(EthStreamGet(), idle_samples);
+    EthStream::Instance().QueueSamples(idle_samples);
 }
 
 } /* extern "C" */
