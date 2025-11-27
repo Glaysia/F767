@@ -33,8 +33,7 @@ void UserCppInit(uint16_t *adc_dma_buffer, size_t adc_dma_samples)
 
 void UserCppProcess(void)
 {
-    uint16_t idle_samples[kEthStreamChannels] = {0U};
-    EthStream::Instance().QueueSamples(idle_samples);
+    AdcHandler::Process();
 }
 
 } /* extern "C" */

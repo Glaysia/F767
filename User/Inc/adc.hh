@@ -16,4 +16,5 @@ struct AdcHandler
 {
     static void Init(uint16_t *dma_buffer, size_t dma_samples);
     static void StartDma(void);
+    static void Process(void);
 };

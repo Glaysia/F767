@@ -12,6 +12,7 @@ extern "C" {
  * Call this from C before invoking other functions declared in this header.
  */
 void UserCppInit(uint16_t *adc_dma_buffer, size_t adc_dma_samples);
+void UserCppProcess(void);
 
 
 

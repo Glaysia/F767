@@ -1,56 +1,99 @@
 #include "eth.hh"
 
+#include <string.h>
+
+extern "C" {
+#include "lwip/err.h"
+#include "lwip/ip_addr.h"
+#include "lwip/pbuf.h"
+#include "lwip/udp.h"
+}
+
 enum
 {
-    kEthStreamSamplesPerFrame = kEthStreamChannels
+    kEthRemoteIp0 = 192,
+    kEthRemoteIp1 = 168,
+    kEthRemoteIp2 = 10,
+    kEthRemoteIp3 = 1,
+    kEthRemotePort = 5000
 };
-
-static EthStream g_eth_stream;
 
 EthStream &EthStream::Instance(void)
 {
-    return g_eth_stream;
+    static EthStream instance;
+    return instance;
 }
 
 void EthStream::Reset(void)
 {
     packet_sequence = 0U;
-    queued_frames = 0U;
+    first_sample_index = 0U;
 
-    for (size_t i = 0; i < kEthStreamFrameCapacity * kEthStreamSamplesPerFrame; ++i)
+    if (udp != NULL)
     {
-        frame_buffer[i] = 0U;
+        udp_remove(udp);
+        udp = NULL;
     }
-}
 
-void EthStream::QueueSamples(const uint16_t samples[kEthStreamChannels])
-{
-    if (samples == NULL)
+    udp = udp_new();
+    if (udp == NULL)
     {
         return;
     }
 
-    if (queued_frames >= kEthStreamFrameCapacity)
+    ip_addr_t remote_ip;
+    IP4_ADDR(&remote_ip, kEthRemoteIp0, kEthRemoteIp1, kEthRemoteIp2, kEthRemoteIp3);
+    const err_t conn = udp_connect(udp, &remote_ip, kEthRemotePort);
+    if (conn != ERR_OK)
     {
-        Flush();
+        udp_remove(udp);
+        udp = NULL;
     }
-
-    size_t base_index = queued_frames * kEthStreamSamplesPerFrame;
-    for (size_t i = 0; i < kEthStreamSamplesPerFrame; ++i)
-    {
-        frame_buffer[base_index + i] = samples[i];
-    }
-
-    ++queued_frames;
 }
 
-size_t EthStream::BytesReady(void) const
+bool EthStream::SendFrame(const uint16_t *samples, size_t sample_count, uint16_t flags)
 {
-    return queued_frames * kEthStreamSamplesPerFrame * sizeof(uint16_t);
-}
+    if ((samples == NULL) || (sample_count == 0U) || (udp == NULL))
+    {
+        return false;
+    }
 
-void EthStream::Flush(void)
-{
-    ++packet_sequence;
-    queued_frames = 0U;
+    if ((sample_count % kEthStreamChannels) != 0U)
+    {
+        return false;
+    }
+
+    const uint16_t samples_per_ch = (uint16_t)(sample_count / kEthStreamChannels);
+    const size_t payload_bytes = sample_count * sizeof(uint16_t);
+    const size_t total_bytes = sizeof(EthPacketHeader) + payload_bytes;
+
+    struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)total_bytes, PBUF_RAM);
+    if (p == NULL)
+    {
+        return false;
+    }
+
+    if (p->len < total_bytes)
+    {
+        pbuf_free(p);
+        return false;
+    }
+
+    EthPacketHeader *hdr = static_cast<EthPacketHeader *>(p->payload);
+    hdr->packet_seq = packet_sequence++;
+    hdr->first_sample_idx = first_sample_index;
+    hdr->channels = kEthStreamChannels;
+    hdr->samples_per_ch = samples_per_ch;
+    hdr->flags = flags;
+    hdr->sample_bits = kEthStreamSampleBits;
+
+    first_sample_index += (uint64_t)samples_per_ch;
+
+    uint8_t *payload = reinterpret_cast<uint8_t *>(p->payload) + sizeof(EthPacketHeader);
+    memcpy(payload, samples, payload_bytes);
+
+    const err_t err = udp_send(udp, p);
+    pbuf_free(p);
+
+    return (err == ERR_OK);
 }

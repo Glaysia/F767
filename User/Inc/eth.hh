@@ -10,20 +10,32 @@
 enum
 {
     kEthStreamChannels = 3,
-    kEthStreamFrameCapacity = 64
+    kEthStreamFrameCapacity = 64,
+    kEthStreamSampleBits = 12
 };
+
+struct EthPacketHeader
+{
+    uint32_t packet_seq;
+    uint64_t first_sample_idx;
+    uint16_t channels;
+    uint16_t samples_per_ch;
+    uint16_t flags;
+    uint16_t sample_bits;
+} __attribute__((packed));
+
+struct udp_pcb;
 
 struct EthStream
 {
     uint32_t packet_sequence;
-    size_t queued_frames;
-    uint16_t frame_buffer[kEthStreamFrameCapacity * kEthStreamChannels];
+    uint64_t first_sample_index;
+    struct udp_pcb *udp;
 
     void Reset(void);
-    void QueueSamples(const uint16_t samples[kEthStreamChannels]);
-    size_t BytesReady(void) const;
+    bool SendFrame(const uint16_t *samples, size_t sample_count, uint16_t flags);
     static EthStream &Instance(void);
 
 private:
-    void Flush(void);
+    EthStream(void) : packet_sequence(0U), first_sample_index(0U), udp(NULL) {}
 };

@@ -43,8 +43,9 @@
 enum
 {
   kAdcDmaChannels = 3,
-  kAdcDmaFrames = 64,
-  kAdcDmaSamples = kAdcDmaChannels * kAdcDmaFrames
+  kAdcDmaSamplesPerChannel = 64,
+  kAdcDmaHalfSamples = kAdcDmaChannels * kAdcDmaSamplesPerChannel,
+  kAdcDmaSamples = kAdcDmaHalfSamples * 2
 };
 
 /* USER CODE END PD */
@@ -130,7 +131,8 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    // MX_LWIP_Process();
+    MX_LWIP_Process();
+    UserCppProcess();
 
     /* USER CODE END WHILE */
 
