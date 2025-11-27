@@ -1,5 +1,7 @@
 #pragma once
 
+#include "stm32f7xx_hal.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -15,6 +17,17 @@ void UserCppInit(void);
  * Safe to invoke from C code (e.g., main.c) whenever needed.
  */
 void UserCppProcess(void);
+
+/**
+ * Build a 1 Hz sinewave lookup table for the DAC.
+ */
+void UserBuild1HzSineLut(void);
+
+/**
+ * Start pumping the sine LUT to DAC channel 1 using DMA.
+ * @return HAL status from HAL_DAC_Start_DMA.
+ */
+HAL_StatusTypeDef UserStart1HzSineDac(void);
 
 #ifdef __cplusplus
 }
