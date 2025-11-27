@@ -26,8 +26,8 @@ int __io_putchar(int ch)
 
 void UserCppInit(uint16_t *adc_dma_buffer, size_t adc_dma_samples)
 {
-    AdcSampleTriple::Init(adc_dma_buffer, adc_dma_samples);
-    AdcSampleTriple::StartDma();
+    AdcHandler::Init(adc_dma_buffer, adc_dma_samples);
+    AdcHandler::StartDma();
     EthStream::Instance().Reset();
 }
 

@@ -12,12 +12,8 @@ enum
     kAdcSampleChannels = 3
 };
 
-struct AdcSampleTriple
+struct AdcHandler
 {
-    uint16_t values[kAdcSampleChannels];
-
     static void Init(uint16_t *dma_buffer, size_t dma_samples);
     static void StartDma(void);
-    static AdcSampleTriple GetLatest(void);
-    static AdcSampleTriple &Instance(void);
 };
