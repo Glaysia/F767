@@ -18,11 +18,14 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "string.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "stm32f7xx_hal.h"
 #include "stm32f7xx_hal_gpio.h"
+#include "stm32f7xx_hal_tim.h"
+#include "stm32f7xx_hal_tim_ex.h"
 #include "string.h"
 #include <stdio.h>
 #include "user.hh"
@@ -130,6 +133,10 @@ int main(void)
   MX_USB_OTG_FS_PCD_Init();
   /* USER CODE BEGIN 2 */
 
+  HAL_TIM_Base_Start(&htim8);
+  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
+  HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_1);
+  
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -138,9 +145,9 @@ int main(void)
   {
     HAL_Delay(1000);
     printf("Hello World!\n");
-    HAL_GPIO_TogglePin(LD1_GPIO_Port,LD1_Pin); // Toggle LD2
+    HAL_GPIO_TogglePin(LD1_GPIO_Port,LD1_Pin); // Toggle LD1
     HAL_GPIO_TogglePin(LD2_GPIO_Port,LD2_Pin); // Toggle LD2
-    HAL_GPIO_TogglePin(LD3_GPIO_Port,LD3_Pin); // Toggle LD2
+    HAL_GPIO_TogglePin(LD3_GPIO_Port,LD3_Pin); // Toggle LD3
 
     /* USER CODE END WHILE */
 
@@ -316,9 +323,9 @@ static void MX_TIM8_Init(void)
 
   /* USER CODE END TIM8_Init 1 */
   htim8.Instance = TIM8;
-  htim8.Init.Prescaler = 2160;
+  htim8.Init.Prescaler = 215;
   htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim8.Init.Period = 1999;
+  htim8.Init.Period = 999;
   htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim8.Init.RepetitionCounter = 0;
   htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -331,7 +338,7 @@ static void MX_TIM8_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_TIM_OC_Init(&htim8) != HAL_OK)
+  if (HAL_TIM_PWM_Init(&htim8) != HAL_OK)
   {
     Error_Handler();
   }
@@ -342,14 +349,14 @@ static void MX_TIM8_Init(void)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_TIMING;
-  sConfigOC.Pulse = 1000;
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 500;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
   sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_OC_ConfigChannel(&htim8, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  if (HAL_TIM_PWM_ConfigChannel(&htim8, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
   {
     Error_Handler();
   }
