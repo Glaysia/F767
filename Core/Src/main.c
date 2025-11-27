@@ -38,6 +38,12 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+enum
+{
+  kAdcDmaChannels = 3,
+  kAdcDmaFrames = 64,
+  kAdcDmaSamples = kAdcDmaChannels * kAdcDmaFrames
+};
 
 /* USER CODE END PD */
 
@@ -76,6 +82,7 @@ TIM_HandleTypeDef htim5;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
+static uint16_t g_adc_dma_buffer[kAdcDmaSamples];
 
 /* USER CODE END PV */
 
@@ -131,9 +138,8 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM5_Init();
   /* USER CODE BEGIN 2 */
-
-
-
+  UserCppInit(g_adc_dma_buffer, kAdcDmaSamples);
+  
   /* USER CODE END 2 */
 
   /* Infinite loop */

@@ -5,6 +5,7 @@
 #endif
 
 #include <stdint.h>
+#include <stddef.h>
 
 enum
 {
@@ -14,10 +15,9 @@ enum
 struct AdcSampleTriple
 {
     uint16_t values[kAdcSampleChannels];
+
+    static void Init(uint16_t *dma_buffer, size_t dma_samples);
+    static void StartDma(void);
+    static AdcSampleTriple GetLatest(void);
+    static AdcSampleTriple &Instance(void);
 };
-
-
-
-void AdcInit(void);
-struct AdcSampleTriple AdcGetLatest(void);
-

@@ -1,7 +1,9 @@
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 
 #include "eth.hh"
+#include "adc.hh"
 #include "user.hh"
 #include "main.h"
 #include "stm32f7xx_hal_def.h"
@@ -22,8 +24,10 @@ int __io_putchar(int ch)
     return ch;
 }
 
-void UserCppInit(void)
+void UserCppInit(uint16_t *adc_dma_buffer, size_t adc_dma_samples)
 {
+    AdcSampleTriple::Init(adc_dma_buffer, adc_dma_samples);
+    AdcSampleTriple::StartDma();
     EthStream::Instance().Reset();
 }
 
