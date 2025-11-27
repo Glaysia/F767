@@ -23,7 +23,7 @@ HEADER_SIZE = HEADER.size
 
 DEFAULT_BIND_IP = "0.0.0.0"
 DEFAULT_BIND_PORT = 5000
-DEFAULT_BUFFER_SIZE = 8192
+DEFAULT_BUFFER_SIZE = 16384
 DEFAULT_TIMEOUT = 0.5
 DEFAULT_RCVBUF = 4 * 1024 * 1024
 
@@ -103,6 +103,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Drop packets whose channel count differs (default: accept any)",
+    )
+    parser.add_argument(
+        "--expect-sample-bits",
+        type=int,
+        default=None,
+        help="Drop packets with unexpected sample_bits (default: accept any)",
+    )
+    parser.add_argument(
+        "--expect-samples-per-ch",
+        type=int,
+        default=None,
+        help="Drop packets with unexpected samples_per_ch (default: accept any)",
     )
     parser.add_argument(
         "--limit-packets", type=int, default=None, help="Stop after this many packets"
@@ -211,8 +223,14 @@ def capture_loop(sock: socket.socket, args: argparse.Namespace) -> CaptureStats:
                 if args.expect_channels is not None and header.channels != args.expect_channels:
                     stats.malformed += 1
                     continue
+                if args.expect_sample_bits is not None and header.sample_bits != args.expect_sample_bits:
+                    stats.malformed += 1
+                    continue
+                if args.expect_samples_per_ch is not None and header.samples_per_ch != args.expect_samples_per_ch:
+                    stats.malformed += 1
+                    continue
 
-                payload_len = header.channels * header.samples_per_ch * 2
+                payload_len = header.channels * header.samples_per_ch * 2  # stream uses uint16 samples
                 if payload_len == 0:
                     stats.malformed += 1
                     continue
