@@ -10,7 +10,7 @@
 enum
 {
     kEthStreamChannels = 1,
-    kEthStreamFrameCapacity = 64,
+    kEthStreamFrameCapacity = 256,
     kEthStreamSampleBits = 8
 };
 

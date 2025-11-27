@@ -15,7 +15,7 @@ void Error_Handler(void);
 enum
 {
     kAdcFrameSamples = kEthStreamFrameCapacity * kEthStreamChannels,
-    kAdcFrameQueueDepth = 4
+    kAdcFrameQueueDepth = 8
 };
 
 struct AdcFrame

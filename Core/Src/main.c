@@ -43,7 +43,7 @@
 enum
 {
   kAdcDmaChannels = 1,
-  kAdcDmaSamplesPerChannel = 64,
+  kAdcDmaSamplesPerChannel = 256,
   kAdcDmaHalfSamples = kAdcDmaChannels * kAdcDmaSamplesPerChannel,
   kAdcDmaSamples = kAdcDmaHalfSamples * 2
 };
