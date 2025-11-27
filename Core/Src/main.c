@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "stm32f7xx_hal.h"
 #include "string.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -133,6 +134,8 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    HAL_Delay(1000);
+    printf("Hello World!\n");
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
