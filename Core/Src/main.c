@@ -29,6 +29,9 @@
 #include "stm32f7xx_hal_tim_ex.h"
 #include "string.h"
 #include <stdio.h>
+#include "lwip/pbuf.h"
+#include "lwip/udp.h"
+#include "lwip/netif.h"
 #include "user.hh"
 /* USER CODE END Includes */
 
@@ -63,6 +66,9 @@ UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
 static uint16_t g_adc_dma_buffer[kAdcDmaSamples];
+static struct udp_pcb *g_udp_test = NULL;
+static ip4_addr_t g_udp_dest;
+static uint32_t g_udp_last_ms = 0U;
 
 /* USER CODE END PV */
 
@@ -74,11 +80,62 @@ static void MX_USART3_UART_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM5_Init(void);
 /* USER CODE BEGIN PFP */
+static void UdpTestInit(void);
+static void UdpTestPoll(void);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+extern struct netif gnetif;
+
+static void UdpTestInit(void)
+{
+  if (g_udp_test != NULL)
+  {
+    return;
+  }
+
+  g_udp_test = udp_new();
+  if (g_udp_test == NULL)
+  {
+    return;
+  }
+
+  IP4_ADDR(&g_udp_dest, 192, 168, 10, 1);
+  if (udp_connect(g_udp_test, &g_udp_dest, 5000) != ERR_OK)
+  {
+    udp_remove(g_udp_test);
+    g_udp_test = NULL;
+  }
+}
+
+static void UdpTestPoll(void)
+{
+  if ((g_udp_test == NULL) || !netif_is_up(&gnetif) || !netif_is_link_up(&gnetif))
+  {
+    return;
+  }
+
+  uint32_t now = HAL_GetTick();
+  if ((now - g_udp_last_ms) < 1000U)
+  {
+    return;
+  }
+  g_udp_last_ms = now;
+
+  static const char msg[] = "hello from F767";
+  struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, sizeof(msg) - 1U, PBUF_RAM);
+  if (p == NULL)
+  {
+    return;
+  }
+
+  memcpy(p->payload, msg, sizeof(msg) - 1U);
+  udp_send(g_udp_test, p);
+  pbuf_free(p);
+}
 
 /* USER CODE END 0 */
 
@@ -118,6 +175,7 @@ int main(void)
   MX_LWIP_Init();
   /* USER CODE BEGIN 2 */
   UserCppInit(g_adc_dma_buffer, kAdcDmaSamples);
+  UdpTestInit();
   
   /* USER CODE END 2 */
 
@@ -126,6 +184,7 @@ int main(void)
   while (1)
   {
     MX_LWIP_Process();
+    UdpTestPoll();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -439,9 +498,9 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *heth){
-  printf("ethernet pinged!\n");
-}
+// void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *heth){
+//   printf("ethernet pinged!\n");
+// }
 /* USER CODE END 4 */
 
 /**
