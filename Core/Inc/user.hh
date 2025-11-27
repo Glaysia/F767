@@ -19,15 +19,15 @@ void UserCppInit(void);
 void UserCppProcess(void);
 
 /**
- * Build a 1 Hz sinewave lookup table for the DAC.
+ * Build lookup tables for the cat-head waveform (upper/lower halves).
  */
-void UserBuild1HzSineLut(void);
+void UserBuildCatLuts(void);
 
 /**
- * Start pumping the sine LUT to DAC channel 1 using DMA.
- * @return HAL status from HAL_DAC_Start_DMA.
+ * Start streaming the cat lookup tables to DAC channels 1 and 2.
+ * @return HAL status aggregated from the DMA start calls.
  */
-HAL_StatusTypeDef UserStart1HzSineDac(void);
+HAL_StatusTypeDef UserStartCatDac(void);
 
 #ifdef __cplusplus
 }

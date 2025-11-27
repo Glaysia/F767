@@ -142,7 +142,7 @@ int main(void)
   // HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_1);
   
   HAL_TIM_Base_Start(&htim2);
-  UserStart1HzSineDac();
+  UserStartCatDac();
   /* USER CODE END 2 */
 
   /* Infinite loop */

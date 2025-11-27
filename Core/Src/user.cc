@@ -14,72 +14,118 @@
 
 static uint32_t g_process_counter = 0;
 
-enum { kUserSineLutLength = 256 };
-static const float kUserPi = 3.14159265358979323846f;
-static uint16_t g_sine_lut[kUserSineLutLength];
-static bool g_sine_lut_ready = false;
+enum { kUserCatLutLength = 256 };
+enum { kUserCatRestRatio = 2 };
+static uint16_t g_cat_top_lut[kUserCatLutLength];
+static uint16_t g_cat_bottom_lut[kUserCatLutLength];
+static bool g_cat_luts_ready = false;
 
-extern "C" void UserCppInit(void)
+static float UserClamp(float value, float min_value, float max_value)
+{
+    if (value < min_value)
+    {
+        return min_value;
+    }
+    if (value > max_value)
+    {
+        return max_value;
+    }
+
+    return value;
+}
+
+static float UserTriangle(float x, float center, float half_width)
+{
+    float distance = fabsf(x - center);
+    if (distance >= half_width)
+    {
+        return 0.0f;
+    }
+
+    return 1.0f - (distance / half_width);
+}
+
+extern "C" {
+
+extern UART_HandleTypeDef huart3;
+extern DAC_HandleTypeDef hdac;
+
+void UserCppInit(void)
 {
     g_process_counter = 0;
 }
 
-extern "C" {
-extern UART_HandleTypeDef huart3;
-extern DAC_HandleTypeDef hdac;
-}
-
-extern "C" void UserCppProcess(void)
+void UserCppProcess(void)
 {
     g_process_counter++;
 }
 
-extern "C" void UserBuild1HzSineLut(void)
+void UserBuildCatLuts(void)
 {
-    const float kFullScale = 4095.0f;
-    const float kOffset = kFullScale * 0.5f;
-    const float kAmplitude = kOffset * 0.95f; /* keep some headroom */
-    const float step = (2.0f * kUserPi) / (float)kUserSineLutLength;
+    const size_t cat_samples = kUserCatLutLength / (1U + kUserCatRestRatio);
+    const size_t rest_samples = kUserCatLutLength - cat_samples;
+    const float step = 2.0f / (float)(cat_samples - 1U);
+    const float top_scale = 1.7f;
+    const float bottom_scale = 1.0f;
 
-    for (size_t i = 0; i < kUserSineLutLength; i++)
+    for (size_t i = 0; i < cat_samples; i++)
     {
-        const float angle = step * (float)i;
-        const float value = kOffset + (kAmplitude * sinf(angle));
-        uint32_t sample = (uint32_t)lroundf(value);
-        if (sample > 4095U)
-        {
-            sample = 4095U;
-        }
-        g_sine_lut[i] = (uint16_t)sample;
+        float x = -1.0f + (step * (float)i);
+
+        float circle = sqrtf(fmaxf(0.0f, 1.0f - (x * x)));
+        float ears = 0.7f * (UserTriangle(x, -0.55f, 0.20f) + UserTriangle(x, 0.55f, 0.20f));
+        float top_shape = circle + ears;
+        float normalized_top = UserClamp(top_shape / top_scale, 0.0f, 1.0f);
+
+        float chin_x = x * 0.85f;
+        float chin_circle = sqrtf(fmaxf(0.0f, 1.0f - (chin_x * chin_x)));
+        float chin_shape = powf(chin_circle, 1.35f);
+        float normalized_bottom = UserClamp(chin_shape / bottom_scale, 0.0f, 1.0f);
+
+        g_cat_top_lut[i] = (uint16_t)lroundf(normalized_top * 4095.0f);
+        g_cat_bottom_lut[i] = (uint16_t)lroundf((1.0f - normalized_bottom) * 4095.0f);
     }
 
-    g_sine_lut_ready = true;
+    for (size_t i = 0; i < rest_samples; i++)
+    {
+        size_t index = cat_samples + i;
+        if (index >= kUserCatLutLength)
+        {
+            break;
+        }
+
+        g_cat_top_lut[index] = 0U;
+        g_cat_bottom_lut[index] = 4095U;
+    }
+
+    g_cat_luts_ready = true;
 }
 
-extern "C" HAL_StatusTypeDef UserStart1HzSineDac(void)
+HAL_StatusTypeDef UserStartCatDac(void)
 {
-    if (!g_sine_lut_ready)
+    if (!g_cat_luts_ready)
     {
-        UserBuild1HzSineLut();
+        UserBuildCatLuts();
     }
 
-    // DAC expects 12-bit right aligned data when configured via CubeMX defaults.
-    HAL_StatusTypeDef ch1 = HAL_DAC_Start_DMA(
+    HAL_StatusTypeDef status_top = HAL_DAC_Start_DMA(
         &hdac,
         DAC_CHANNEL_1,
-        (uint32_t *)g_sine_lut,
-        kUserSineLutLength,
+        (uint32_t *)g_cat_top_lut,
+        kUserCatLutLength,
         DAC_ALIGN_12B_R);
-    HAL_StatusTypeDef ch2 = HAL_DAC_Start_DMA(
+
+    HAL_StatusTypeDef status_bottom = HAL_DAC_Start_DMA(
         &hdac,
         DAC_CHANNEL_2,
-        (uint32_t *)g_sine_lut,
-        kUserSineLutLength,
+        (uint32_t *)g_cat_bottom_lut,
+        kUserCatLutLength,
         DAC_ALIGN_12B_R);
-    return ch1==HAL_OK && ch2==HAL_OK ? HAL_OK : HAL_ERROR;
+
+    return (status_top == HAL_OK && status_bottom == HAL_OK) ? HAL_OK : HAL_ERROR;
 }
 
-extern "C" int __io_putchar(int ch)
+int __io_putchar(int ch)
 {
     uint8_t data = (uint8_t)ch;
     if (HAL_UART_Transmit(&huart3, &data, 1, HAL_MAX_DELAY) != HAL_OK)
@@ -89,3 +135,5 @@ extern "C" int __io_putchar(int ch)
 
     return ch;
 }
+
+} /* extern "C" */
