@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "stm32f7xx_hal.h"
+#include "stm32f7xx_hal_eth.h"
 #include "stm32f7xx_hal_gpio.h"
 #include "stm32f7xx_hal_tim.h"
 #include "stm32f7xx_hal_tim_ex.h"
@@ -124,7 +125,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-
+    MX_LWIP_Process();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -438,7 +439,9 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *heth){
+  printf("ethernet pinged!\n");
+}
 /* USER CODE END 4 */
 
 /**
