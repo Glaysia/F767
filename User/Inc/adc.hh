@@ -9,7 +9,7 @@
 
 enum
 {
-    kAdcSampleChannels = 3
+    kAdcSampleChannels = 1
 };
 
 struct AdcHandler

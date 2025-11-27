@@ -63,8 +63,13 @@ bool EthStream::SendFrame(const uint16_t *samples, size_t sample_count, uint16_t
         return false;
     }
 
+    const size_t sample_bytes = (kEthStreamSampleBits + 7U) / 8U;
+    if (sample_bytes == 0U)
+    {
+        return false;
+    }
     const uint16_t samples_per_ch = (uint16_t)(sample_count / kEthStreamChannels);
-    const size_t payload_bytes = sample_count * sizeof(uint16_t);
+    const size_t payload_bytes = sample_count * sample_bytes;
     const size_t total_bytes = sizeof(EthPacketHeader) + payload_bytes;
 
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)total_bytes, PBUF_RAM);
@@ -90,7 +95,17 @@ bool EthStream::SendFrame(const uint16_t *samples, size_t sample_count, uint16_t
     first_sample_index += (uint64_t)samples_per_ch;
 
     uint8_t *payload = reinterpret_cast<uint8_t *>(p->payload) + sizeof(EthPacketHeader);
-    memcpy(payload, samples, payload_bytes);
+    if (sample_bytes == sizeof(uint16_t))
+    {
+        memcpy(payload, samples, payload_bytes);
+    }
+    else
+    {
+        for (size_t i = 0; i < sample_count; ++i)
+        {
+            payload[i] = (uint8_t)(samples[i] & 0xFFU);
+        }
+    }
 
     const err_t err = udp_send(udp, p);
     pbuf_free(p);
