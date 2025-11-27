@@ -42,10 +42,8 @@
 /* USER CODE BEGIN PD */
 enum
 {
-  kAdcDmaChannels = 3,
   kAdcDmaSamplesPerChannel = 64,
-  kAdcDmaHalfSamples = kAdcDmaChannels * kAdcDmaSamplesPerChannel,
-  kAdcDmaSamples = kAdcDmaHalfSamples * 2
+  kAdcDmaSamplesPerAdc = kAdcDmaSamplesPerChannel * 2
 };
 
 /* USER CODE END PD */
@@ -67,7 +65,8 @@ TIM_HandleTypeDef htim8;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
-static uint16_t g_adc_dma_buffer[kAdcDmaSamples];
+static uint16_t g_adc1_dma_buffer[kAdcDmaSamplesPerAdc];
+static uint16_t g_adc2_dma_buffer[kAdcDmaSamplesPerAdc];
 
 
 /* USER CODE END PV */
@@ -129,7 +128,7 @@ int main(void)
   MX_TIM8_Init();
   MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
-  UserCppInit(g_adc_dma_buffer, kAdcDmaSamples);
+  UserCppInit(g_adc1_dma_buffer, g_adc2_dma_buffer, kAdcDmaSamplesPerAdc);
 
   
   /* USER CODE END 2 */

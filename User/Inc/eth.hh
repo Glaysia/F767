@@ -9,9 +9,9 @@
 
 enum
 {
-    kEthStreamChannels = 3,
+    kEthStreamChannels = 2,
     kEthStreamFrameCapacity = 64,
-    kEthStreamSampleBits = 12
+    kEthStreamSampleBits = 8
 };
 
 struct EthPacketHeader

@@ -12,9 +12,9 @@ BIND_IP = "0.0.0.0"
 BIND_PORT = 5000
 
 # Sampling params (per channel)
-TIM5_TRIGGER_HZ = 1_255_800  # ~1.2558 MHz update rate
-CHANNEL_COUNT = 3
-FS_PER_CH = TIM5_TRIGGER_HZ / CHANNEL_COUNT
+TIM5_TRIGGER_HZ = 1_255_800  # ~72 MHz / 86 with ARR=85, PSC=0 (per-channel)
+CHANNEL_COUNT = 2
+FS_PER_CH = TIM5_TRIGGER_HZ
 
 # Plot window
 WINDOW_SAMPLES = 1024  # per channel
@@ -26,7 +26,7 @@ HEADER_SIZE = struct.calcsize(HEADER_FMT)
 def parse_packet(buf: bytes) -> Tuple[dict, np.ndarray]:
     if len(buf) < HEADER_SIZE:
         raise ValueError("short packet")
-    packet_seq, first_sample_idx, channels, samples_per_ch, flags, _ = struct.unpack_from(
+    packet_seq, first_sample_idx, channels, samples_per_ch, flags, sample_bits = struct.unpack_from(
         HEADER_FMT, buf
     )
     payload = buf[HEADER_SIZE:]
@@ -43,6 +43,7 @@ def parse_packet(buf: bytes) -> Tuple[dict, np.ndarray]:
         "channels": channels,
         "samples_per_ch": samples_per_ch,
         "flags": flags,
+        "sample_bits": sample_bits,
     }
     return hdr, frame
 
@@ -64,7 +65,7 @@ def main() -> None:
     ]
     ax.set_xlabel("time (s)")
     ax.set_ylabel("ADC code")
-    ax.set_ylim(0, 4096)
+    ax.set_ylim(0, 256)
     ax.legend(loc="upper right")
 
     def update_plot():
@@ -99,6 +100,10 @@ def main() -> None:
             t0 = hdr["first_sample_idx"] / FS_PER_CH
             ts = t0 + np.arange(hdr["samples_per_ch"]) / FS_PER_CH
             ys = frame.astype(np.float64)
+
+            if hdr["sample_bits"] > 0:
+                ymax = (1 << hdr["sample_bits"])
+                ax.set_ylim(0, ymax)
 
             t_buf = np.concatenate([t_buf, ts])
             y_buf = np.vstack([y_buf, ys])

@@ -24,9 +24,9 @@ int __io_putchar(int ch)
     return ch;
 }
 
-void UserCppInit(uint16_t *adc_dma_buffer, size_t adc_dma_samples)
+void UserCppInit(uint16_t *adc1_dma_buffer, uint16_t *adc2_dma_buffer, size_t adc_dma_samples_per_adc)
 {
-    AdcHandler::Init(adc_dma_buffer, adc_dma_samples);
+    AdcHandler::Init(adc1_dma_buffer, adc2_dma_buffer, adc_dma_samples_per_adc);
     AdcHandler::StartDma();
     EthStream::Instance().Reset();
 }
