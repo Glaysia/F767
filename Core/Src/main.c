@@ -18,12 +18,14 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stm32f7xx_hal.h"
-#include "string.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stm32f7xx_hal.h"
+#include "stm32f7xx_hal_gpio.h"
+#include "string.h"
+#include <stdio.h>
+#include "user.hh"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -136,6 +138,10 @@ int main(void)
   {
     HAL_Delay(1000);
     printf("Hello World!\n");
+    HAL_GPIO_TogglePin(LD1_GPIO_Port,LD1_Pin); // Toggle LD2
+    HAL_GPIO_TogglePin(LD2_GPIO_Port,LD2_Pin); // Toggle LD2
+    HAL_GPIO_TogglePin(LD3_GPIO_Port,LD3_Pin); // Toggle LD2
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
