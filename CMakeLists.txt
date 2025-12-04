@@ -52,6 +52,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     User/Src/eth.cc
     User/Src/user.cc
 )
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/main.c PROPERTIES LANGUAGE CXX)
+
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
