@@ -326,6 +326,33 @@ const indexHTML = `<!DOCTYPE html>
       return { data: result, startIdx };
     }
 
+    function ringRange(buf, startIdx, sampleCount) {
+      if (!buf || buf.size === 0 || sampleCount <= 0) {
+        return { data: [], startIdx: startIdx || 0 };
+      }
+      const firstAvail = buf.startIdx;
+      const lastAvail = buf.endIdx;
+      let start = startIdx;
+      if (start < firstAvail) start = firstAvail;
+      if (start > lastAvail - 1) start = lastAvail - 1;
+      if (start + sampleCount > lastAvail) {
+        start = lastAvail - sampleCount;
+      }
+      if (start < firstAvail) {
+        sampleCount = Math.max(0, sampleCount - (firstAvail - start));
+        start = firstAvail;
+      }
+      if (sampleCount <= 0) {
+        return { data: [], startIdx: start };
+      }
+      const result = new Array(sampleCount);
+      let offset = (start - buf.startIdx) % ring.capacity;
+      for (let i = 0; i < sampleCount; i++) {
+        result[i] = buf.data[(offset + i) % ring.capacity];
+      }
+      return { data: result, startIdx: start };
+    }
+
     function downsample(data, maxPoints) {
       if (data.length <= maxPoints) {
         return data.slice();
@@ -385,8 +412,24 @@ const indexHTML = `<!DOCTYPE html>
       const trigChannel = lastTriggerInfo ? lastTriggerInfo.channel : null;
       const trigLevelCounts = lastTriggerInfo ? lastTriggerInfo.level : null;
 
+      let windowStartIdx = null;
+
       ring.buffers.forEach((buf, ch) => {
-        const snapshot = ringSnapshot(buf, neededSamples);
+        if (buf.size === 0) {
+          return;
+        }
+
+        if (windowStartIdx === null) {
+          const latestStart = buf.endIdx - neededSamples;
+          const triggerIdx = typeof lastTriggerAbsIdx === 'number' ? lastTriggerAbsIdx : null;
+          if (triggerIdx !== null) {
+            windowStartIdx = triggerIdx - Math.floor(neededSamples / 2);
+          } else {
+            windowStartIdx = latestStart;
+          }
+        }
+
+        const snapshot = ringRange(buf, windowStartIdx, neededSamples);
         if (!snapshot.data.length) {
           return;
         }
