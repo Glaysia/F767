@@ -40,6 +40,7 @@ const indexHTML = `<!DOCTYPE html>
     button { cursor: pointer; transition: background 0.2s ease; }
     button:hover { background: rgba(65,223,255,0.2); }
     .hint { font-size: 13px; opacity: 0.7; margin-top: 10px; }
+    .hint.small { font-size: 12px; margin-top: 4px; opacity: 0.6; }
     .inline-value { font-size: 13px; opacity: 0.75; }
     .control.full { grid-column: span 2; }
   </style>
@@ -54,30 +55,14 @@ const indexHTML = `<!DOCTYPE html>
     </div>
     <div class="controls">
       <div class="control">
-        <label for="time-div">시간축 (µs/div)</label>
-        <select id="time-div">
-          <option value="0.2">0.2 µs/div</option>
-          <option value="0.5">0.5 µs/div</option>
-          <option value="1">1 µs/div</option>
-          <option value="2" selected>2 µs/div</option>
-          <option value="5">5 µs/div</option>
-          <option value="10">10 µs/div</option>
-          <option value="20">20 µs/div</option>
-          <option value="50">50 µs/div</option>
-          <option value="100">100 µs/div</option>
-        </select>
+        <label for="time-range">시간축 <span class="inline-value" id="time-div-label">2 µs/div</span></label>
+        <input type="range" id="time-range" min="0" max="0" step="1">
+        <div class="hint small">0.1 µs/div부터 100 ms/div까지 연속 1-2-5 스텝</div>
       </div>
       <div class="control">
-        <label for="volt-div">전압축 (V/div)</label>
-        <select id="volt-div">
-          <option value="0.05">50 mV/div</option>
-          <option value="0.1">100 mV/div</option>
-          <option value="0.2">200 mV/div</option>
-          <option value="0.5" selected>0.5 V/div</option>
-          <option value="1">1 V/div</option>
-          <option value="2">2 V/div</option>
-          <option value="5">5 V/div</option>
-        </select>
+        <label for="volt-range">전압축 <span class="inline-value" id="volt-div-label">0.5 V/div</span></label>
+        <input type="range" id="volt-range" min="0" max="0" step="1">
+        <div class="hint small">10 mV/div ~ 10 V/div</div>
       </div>
       <div class="control">
         <label for="volt-offset">전압 오프셋 (V) <span class="inline-value" id="volt-offset-value">1.65 V</span></label>
@@ -127,20 +112,22 @@ const indexHTML = `<!DOCTYPE html>
   </div>
   <script>
   (function() {
-    const SAMPLE_RATE = 2.4e6;
+    const DEFAULT_SAMPLE_RATE = 2.4e6;
     const H_DIVS = 10;
     const V_DIVS = 8;
     const FULL_SCALE_V = 3.3;
-    const TIME_DIV_VALUES = [0.2, 0.5, 1, 2, 5, 10, 20, 50, 100];
-    const VOLT_DIV_VALUES = [0.05, 0.1, 0.2, 0.5, 1, 2, 5];
+    const TIME_SCALE = build125Scale(0.1, 100000);
+    const VOLT_SCALE = build125Scale(0.01, 10);
 
     const statusEl = document.getElementById('status');
     const triggerStatusEl = document.getElementById('trigger-status');
     const canvas = document.getElementById('scope');
     const ctx = canvas.getContext('2d');
     const controls = {
-      timeDiv: document.getElementById('time-div'),
-      voltDiv: document.getElementById('volt-div'),
+      timeRange: document.getElementById('time-range'),
+      timeLabel: document.getElementById('time-div-label'),
+      voltRange: document.getElementById('volt-range'),
+      voltLabel: document.getElementById('volt-div-label'),
       voltOffset: document.getElementById('volt-offset'),
       voltOffsetLabel: document.getElementById('volt-offset-value'),
       mode: document.getElementById('trigger-mode'),
@@ -154,37 +141,136 @@ const indexHTML = `<!DOCTYPE html>
       autoset: document.getElementById('autoset'),
     };
     const state = {
-      timeDiv: parseFloat(controls.timeDiv.value),
-      voltDiv: parseFloat(controls.voltDiv.value),
+      timeDiv: 2,
+      voltDiv: 0.5,
       voltOffset: parseFloat(controls.voltOffset.value),
+      sampleRate: DEFAULT_SAMPLE_RATE,
     };
     let lastFrame = { samples: null, bits: 8, trigger: null };
     let reconnectTimer = null;
     let ws = null;
 
+    initializeRangeControls();
+    attachControlEvents();
+    connect();
+
+    function initializeRangeControls() {
+      controls.timeRange.min = 0;
+      controls.timeRange.max = TIME_SCALE.length - 1;
+      setTimeByIndex(findNearestIndex(TIME_SCALE, state.timeDiv), true);
+
+      controls.voltRange.min = 0;
+      controls.voltRange.max = VOLT_SCALE.length - 1;
+      setVoltByIndex(findNearestIndex(VOLT_SCALE, state.voltDiv), true);
+    }
+
     function clamp(value, min, max) {
       return Math.min(Math.max(value, min), max);
     }
 
+    function build125Scale(min, max) {
+      const steps = [1, 2, 5];
+      const values = [];
+      let exponent = Math.floor(Math.log10(min));
+      let decade = Math.pow(10, exponent);
+      while (true) {
+        for (const step of steps) {
+          const val = Number((step * decade).toPrecision(6));
+          if (val < min - 1e-9) {
+            continue;
+          }
+          if (val > max + 1e-9) {
+            if (values.length > 0) {
+              return values;
+            }
+            continue;
+          }
+          values.push(val);
+        }
+        decade *= 10;
+      }
+    }
+
+    function findNearestIndex(arr, target) {
+      let best = 0;
+      let diff = Infinity;
+      arr.forEach((value, idx) => {
+        const d = Math.abs(value - target);
+        if (d < diff) {
+          diff = d;
+          best = idx;
+        }
+      });
+      return best;
+    }
+
+    function formatTimeDivLabel(value) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return '—';
+      if (num >= 1000) {
+        const ms = num / 1000;
+        return (Number.isInteger(ms) ? ms.toFixed(0) : ms.toFixed(2)) + ' ms/div';
+      }
+      if (num >= 1) {
+        return (Number.isInteger(num) ? num.toFixed(0) : num.toString()) + ' µs/div';
+      }
+      return num.toFixed(2) + ' µs/div';
+    }
+
+    function formatVoltDivLabel(value) {
+      const num = Number(value);
+      if (num >= 1) {
+        return num.toFixed(2) + ' V/div';
+      }
+      return (num * 1000).toFixed(0) + ' mV/div';
+    }
+
     function setStatus(text) {
-      statusEl.textContent = text + ' | ' + controls.timeDiv.value + ' µs/div · ' + controls.voltDiv.value + ' V/div';
+      statusEl.textContent = text + ' | ' + formatTimeDivLabel(state.timeDiv) + ' · ' + formatVoltDivLabel(state.voltDiv);
     }
 
     function setTriggerStatus(text) {
       triggerStatusEl.textContent = '트리거: ' + text;
     }
 
-    function sliceForTimebase(samples) {
+    function setTimeByIndex(index, skipRender) {
+      const idx = clamp(Math.round(index), 0, TIME_SCALE.length - 1);
+      state.timeDiv = TIME_SCALE[idx];
+      controls.timeRange.value = idx;
+      controls.timeLabel.textContent = formatTimeDivLabel(state.timeDiv);
+      if (!skipRender) renderCurrentFrame();
+    }
+
+    function setVoltByIndex(index, skipRender) {
+      const idx = clamp(Math.round(index), 0, VOLT_SCALE.length - 1);
+      state.voltDiv = VOLT_SCALE[idx];
+      controls.voltRange.value = idx;
+      controls.voltLabel.textContent = formatVoltDivLabel(state.voltDiv);
+      if (!skipRender) renderCurrentFrame();
+    }
+
+    function sliceForTimebase(samples, trigger) {
       const windowSeconds = state.timeDiv * 1e-6 * H_DIVS;
-      let needed = Math.max(1, Math.floor(windowSeconds * SAMPLE_RATE));
+      let needed = Math.max(1, Math.floor(windowSeconds * state.sampleRate));
       if (!Number.isFinite(needed) || needed <= 0) {
         needed = samples.length;
       }
       if (needed > samples.length) {
         needed = samples.length;
       }
-      const start = Math.max(0, samples.length - needed);
-      return { subset: samples.slice(start), startIndex: start };
+      let start = samples.length - needed;
+      if (start < 0) start = 0;
+      if (trigger && typeof trigger.index === 'number') {
+        const trigIdx = clamp(trigger.index, 0, samples.length - 1);
+        const half = Math.floor(needed / 2);
+        start = trigIdx - half;
+        if (start < 0) start = 0;
+        if (start + needed > samples.length) {
+          start = Math.max(0, samples.length - needed);
+        }
+      }
+      const end = Math.min(samples.length, start + needed);
+      return { subset: samples.slice(start, end), startIndex: start };
     }
 
     function renderCurrentFrame() {
@@ -195,7 +281,8 @@ const indexHTML = `<!DOCTYPE html>
       }
       const bits = lastFrame.bits || 8;
       const samples = lastFrame.samples[ch];
-      const { subset, startIndex } = sliceForTimebase(samples);
+      const trig = lastFrame.trigger && lastFrame.trigger.channel === ch ? lastFrame.trigger : null;
+      const { subset, startIndex } = sliceForTimebase(samples, trig);
       const maxCount = Math.pow(2, bits) - 1 || 255;
       const countsToVolt = FULL_SCALE_V / maxCount;
       let minV = state.voltOffset - (state.voltDiv * V_DIVS) / 2;
@@ -225,7 +312,6 @@ const indexHTML = `<!DOCTYPE html>
       }
       ctx.stroke();
 
-      const trig = lastFrame.trigger && lastFrame.trigger.channel === ch ? lastFrame.trigger : null;
       if (trig && typeof trig.level === 'number') {
         const levelVolt = (trig.level / maxCount) * FULL_SCALE_V;
         if (levelVolt >= minV && levelVolt <= maxV) {
@@ -307,35 +393,22 @@ const indexHTML = `<!DOCTYPE html>
       const bits = lastFrame.bits || 8;
       const countsToVolt = FULL_SCALE_V / (Math.pow(2, bits) - 1 || 255);
       const p2pVolt = Math.max((max - min) * countsToVolt, 0.01);
-      const targetSpan = p2pVolt * 1.3;
-      let bestVoltDiv = VOLT_DIV_VALUES[VOLT_DIV_VALUES.length - 1];
-      for (const opt of VOLT_DIV_VALUES) {
-        if (opt * V_DIVS >= targetSpan) {
-          bestVoltDiv = opt;
-          break;
-        }
-      }
-      controls.voltDiv.value = bestVoltDiv.toString();
-      state.voltDiv = bestVoltDiv;
+      const targetSpanPerDiv = (p2pVolt * 1.3) / V_DIVS;
+      const voltIdx = findNearestIndex(VOLT_SCALE, targetSpanPerDiv);
+      setVoltByIndex(voltIdx, true);
 
-      const midVolt = mid * countsToVolt;
-      controls.voltOffset.value = clamp(midVolt, 0, FULL_SCALE_V).toFixed(2);
-      controls.voltOffsetLabel.textContent = parseFloat(controls.voltOffset.value).toFixed(2) + ' V';
-      state.voltOffset = parseFloat(controls.voltOffset.value);
+      const midVolt = clamp(mid * countsToVolt, 0, FULL_SCALE_V);
+      controls.voltOffset.value = midVolt.toFixed(2);
+      controls.voltOffsetLabel.textContent = midVolt.toFixed(2) + ' V';
+      state.voltOffset = midVolt;
 
       const periodSamples = estimatePeriod(samples, mid);
       if (periodSamples) {
-        const periodTime = periodSamples / SAMPLE_RATE;
+        const periodTime = periodSamples / state.sampleRate;
         const desiredWindow = Math.max(periodTime * 2, periodTime * 1.2);
-        let bestTimeDiv = TIME_DIV_VALUES[TIME_DIV_VALUES.length - 1];
-        for (const opt of TIME_DIV_VALUES) {
-          if ((opt * 1e-6) * H_DIVS >= desiredWindow) {
-            bestTimeDiv = opt;
-            break;
-          }
-        }
-        controls.timeDiv.value = bestTimeDiv.toString();
-        state.timeDiv = bestTimeDiv;
+        const desiredPerDiv = (desiredWindow / H_DIVS) * 1e6;
+        const timeIdx = findNearestIndex(TIME_SCALE, desiredPerDiv);
+        setTimeByIndex(timeIdx, true);
       }
 
       renderCurrentFrame();
@@ -357,13 +430,11 @@ const indexHTML = `<!DOCTYPE html>
     }
 
     function attachControlEvents() {
-      controls.timeDiv.addEventListener('change', () => {
-        state.timeDiv = parseFloat(controls.timeDiv.value);
-        renderCurrentFrame();
+      controls.timeRange.addEventListener('input', () => {
+        setTimeByIndex(Number(controls.timeRange.value), false);
       });
-      controls.voltDiv.addEventListener('change', () => {
-        state.voltDiv = parseFloat(controls.voltDiv.value);
-        renderCurrentFrame();
+      controls.voltRange.addEventListener('input', () => {
+        setVoltByIndex(Number(controls.voltRange.value), false);
       });
       controls.voltOffset.addEventListener('input', () => {
         state.voltOffset = parseFloat(controls.voltOffset.value);
@@ -395,8 +466,7 @@ const indexHTML = `<!DOCTYPE html>
     }
 
     function connect() {
-      const url = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') +
-                  window.location.host + '/ws';
+      const url = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/ws';
       ws = new WebSocket(url);
 
       ws.onopen = () => {
@@ -412,6 +482,11 @@ const indexHTML = `<!DOCTYPE html>
         try {
           const msg = JSON.parse(event.data);
           if (msg.samples && msg.samples.length) {
+            if (typeof msg.sample_rate === 'number' && isFinite(msg.sample_rate) && msg.sample_rate > 0) {
+              state.sampleRate = msg.sample_rate;
+            } else {
+              state.sampleRate = DEFAULT_SAMPLE_RATE;
+            }
             drawWave(msg.samples, msg.sample_bits || 8, msg.trigger);
             const trigState = msg.trigger && msg.trigger.state ? msg.trigger.state : 'auto';
             const info = trigState + ' · ' + msg.samples_per_ch + ' samples';
@@ -434,11 +509,9 @@ const indexHTML = `<!DOCTYPE html>
         ws.close();
       };
     }
-
-    attachControlEvents();
-    connect();
   })();
   </script>
+
 </body>
 </html>`
 
