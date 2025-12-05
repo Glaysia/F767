@@ -581,7 +581,7 @@ const (
 	defaultPreview    = 8
 	approxSampleRate  = 2.4e6 // samples per second per channel
 	ringCapacityPerCh = 1_000_000
-	snapshotSamples   = 4096
+	snapshotSamples   = 16384
 )
 
 type packetHeader struct {
@@ -1075,6 +1075,7 @@ type wsHub struct {
 	trigger       *triggerController
 	buffer        *sampleBuffer
 	snapshotSize  int
+	deliverIdx    uint64
 }
 
 func newWSHub(fps int, trigger *triggerController) *wsHub {
@@ -1100,6 +1101,7 @@ func newWSHub(fps int, trigger *triggerController) *wsHub {
 		trigger:       trigger,
 		buffer:        newSampleBuffer(1, ringCapacityPerCh),
 		snapshotSize:  snapshotSamples,
+		deliverIdx:    0,
 	}
 }
 
@@ -1415,6 +1417,9 @@ func (h *wsHub) broadcastLatest() {
 	if version == h.lastBroadcast.Load() {
 		return
 	}
+
+	evt.FirstSampleIdx = h.deliverIdx
+	h.deliverIdx += uint64(evt.SamplesPerCh)
 
 	h.mu.Lock()
 	if len(h.clients) == 0 {
