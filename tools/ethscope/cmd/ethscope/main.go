@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -143,13 +144,51 @@ type packetEvent struct {
 	Samples        [][]uint16 `json:"samples"`
 }
 
-type wsHub struct {
-	mu       sync.Mutex
-	clients  map[*websocket.Conn]struct{}
-	upgrader websocket.Upgrader
+type packetStore struct {
+	mu      sync.RWMutex
+	version uint64
+	seq     uint32
+	data    []byte
 }
 
-func newWSHub() *wsHub {
+func (ps *packetStore) Store(seq uint32, data []byte) {
+	ps.mu.Lock()
+	ps.seq = seq
+	ps.data = data
+	ps.version++
+	ps.mu.Unlock()
+}
+
+func (ps *packetStore) Load() (uint64, uint32, []byte) {
+	ps.mu.RLock()
+	v := ps.version
+	seq := ps.seq
+	data := ps.data
+	ps.mu.RUnlock()
+	return v, seq, data
+}
+
+type wsHub struct {
+	mu            sync.Mutex
+	clients       map[*websocket.Conn]struct{}
+	upgrader      websocket.Upgrader
+	frameInterval time.Duration
+	writeTimeout  time.Duration
+	latest        packetStore
+	lastBroadcast atomic.Uint64
+}
+
+func newWSHub(fps int) *wsHub {
+	if fps <= 0 {
+		fps = 30
+	}
+	if fps > 240 {
+		fps = 240
+	}
+	interval := time.Second / time.Duration(fps)
+	if interval <= 0 {
+		interval = time.Second / 60
+	}
 	return &wsHub{
 		clients: make(map[*websocket.Conn]struct{}),
 		upgrader: websocket.Upgrader{
@@ -157,6 +196,20 @@ func newWSHub() *wsHub {
 			WriteBufferSize: 1024,
 			CheckOrigin:     func(r *http.Request) bool { return true },
 		},
+		frameInterval: interval,
+		writeTimeout:  500 * time.Millisecond,
+	}
+}
+
+func (h *wsHub) Start() {
+	go h.dispatchLoop()
+}
+
+func (h *wsHub) dispatchLoop() {
+	ticker := time.NewTicker(h.frameInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		h.broadcastLatest()
 	}
 }
 
@@ -164,9 +217,11 @@ func main() {
 	listen := flag.String("listen", ":8080", "HTTP listen address, e.g. :8080 or 0.0.0.0:8080")
 	udpListen := flag.String("udp", ":5000", "UDP listen address for ADC packets")
 	dumpPackets := flag.Bool("dump-packets", false, "log each UDP packet summary to stdout")
+	uiFPS := flag.Int("ui-fps", 60, "maximum WebSocket frame rate (frames per second)")
 	flag.Parse()
 
-	hub := newWSHub()
+	hub := newWSHub(*uiFPS)
+	hub.Start()
 
 	go func() {
 		if err := runUDPReceiver(*udpListen, *dumpPackets, hub); err != nil {
@@ -424,31 +479,40 @@ func (h *wsHub) BroadcastPacket(header packetHeader, payload []byte) error {
 		return nil
 	}
 
-	h.mu.Lock()
-	hasClients := len(h.clients) > 0
-	h.mu.Unlock()
-	if !hasClients {
-		return nil
-	}
-
 	msg, err := buildPacketEvent(header, payload)
 	if err != nil {
 		return err
 	}
 
-	h.broadcast(msg)
+	h.latest.Store(header.PacketSeq, msg)
 	return nil
 }
 
-func (h *wsHub) broadcast(data []byte) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func (h *wsHub) broadcastLatest() {
+	version, _, data := h.latest.Load()
+	if data == nil || version == 0 {
+		return
+	}
+	if version == h.lastBroadcast.Load() {
+		return
+	}
 
+	h.mu.Lock()
+	if len(h.clients) == 0 {
+		h.mu.Unlock()
+		return
+	}
+	conns := make([]*websocket.Conn, 0, len(h.clients))
 	for conn := range h.clients {
-		conn.SetWriteDeadline(time.Now().Add(150 * time.Millisecond))
+		conns = append(conns, conn)
+	}
+	h.mu.Unlock()
+
+	h.lastBroadcast.Store(version)
+	for _, conn := range conns {
+		conn.SetWriteDeadline(time.Now().Add(h.writeTimeout))
 		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			conn.Close()
-			delete(h.clients, conn)
+			h.remove(conn)
 			log.Printf("ws write error: %v", err)
 		}
 	}
