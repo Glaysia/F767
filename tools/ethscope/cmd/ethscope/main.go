@@ -382,6 +382,8 @@ const indexHTML = `<!DOCTYPE html>
         maxV = FULL_SCALE_V;
       }
       const spanV = Math.max(0.01, maxV - minV);
+      const trigChannel = lastTriggerInfo ? lastTriggerInfo.channel : null;
+      const trigLevelCounts = lastTriggerInfo ? lastTriggerInfo.level : null;
 
       ring.buffers.forEach((buf, ch) => {
         const snapshot = ringSnapshot(buf, neededSamples);
@@ -401,6 +403,21 @@ const indexHTML = `<!DOCTYPE html>
           else ctx.lineTo(x, y);
         });
         ctx.stroke();
+
+        if (trigChannel === ch && typeof trigLevelCounts === 'number') {
+          const trigVolt = (trigLevelCounts / maxCount) * FULL_SCALE_V;
+          if (trigVolt >= minV && trigVolt <= maxV) {
+            const norm = clamp((trigVolt - minV) / spanV, 0, 1);
+            const y = canvas.height - norm * canvas.height;
+            ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+            ctx.setLineDash([6, 4]);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        }
 
         if (lastTriggerInfo && lastTriggerInfo.channel === ch && typeof lastTriggerAbsIdx === 'number') {
           const rel = lastTriggerAbsIdx - snapshot.startIdx;
@@ -1075,7 +1092,6 @@ type wsHub struct {
 	trigger       *triggerController
 	buffer        *sampleBuffer
 	snapshotSize  int
-	deliverIdx    uint64
 }
 
 func newWSHub(fps int, trigger *triggerController) *wsHub {
@@ -1101,7 +1117,6 @@ func newWSHub(fps int, trigger *triggerController) *wsHub {
 		trigger:       trigger,
 		buffer:        newSampleBuffer(1, ringCapacityPerCh),
 		snapshotSize:  snapshotSamples,
-		deliverIdx:    0,
 	}
 }
 
@@ -1417,9 +1432,6 @@ func (h *wsHub) broadcastLatest() {
 	if version == h.lastBroadcast.Load() {
 		return
 	}
-
-	evt.FirstSampleIdx = h.deliverIdx
-	h.deliverIdx += uint64(evt.SamplesPerCh)
 
 	h.mu.Lock()
 	if len(h.clients) == 0 {
