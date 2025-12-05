@@ -119,6 +119,8 @@ const indexHTML = `<!DOCTYPE html>
     const RING_CAPACITY = 500000;
     const MAX_DISPLAY_POINTS = 2048;
     const CHANNEL_COLORS = ['#ffd447', '#4fb7ff', '#8df5ff', '#ff7ceb'];
+    const TIME_SCALE = build125Scale(0.1, 100000);
+    const VOLT_SCALE = build125Scale(0.01, 10);
 
     const statusEl = document.getElementById('status');
     const triggerStatusEl = document.getElementById('trigger-status');
@@ -146,14 +148,13 @@ const indexHTML = `<!DOCTYPE html>
       voltDiv: 0.5,
       voltOffset: parseFloat(controls.voltOffset.value),
       sampleRate: DEFAULT_SAMPLE_RATE,
+      sampleBits: 8,
     };
     const ring = {
       buffers: [],
       capacity: RING_CAPACITY,
     };
     let lastMsg = null;
-    let lastSeq = 0;
-    let lastSamplesPerCh = 0;
     let lastTriggerInfo = null;
     let lastTriggerAbsIdx = null;
     let reconnectTimer = null;
@@ -164,17 +165,13 @@ const indexHTML = `<!DOCTYPE html>
     connect();
 
     function initializeRangeControls() {
-      const timeScale = build125Scale(0.1, 100000);
-      const voltScale = build125Scale(0.01, 10);
       controls.timeRange.min = 0;
-      controls.timeRange.max = timeScale.length - 1;
-      controls.timeRange.dataset.scale = JSON.stringify(timeScale);
-      setTimeByIndex(findNearestIndex(timeScale, state.timeDiv), true);
+      controls.timeRange.max = TIME_SCALE.length - 1;
+      setTimeByIndex(findNearestIndex(TIME_SCALE, state.timeDiv), true);
 
       controls.voltRange.min = 0;
-      controls.voltRange.max = voltScale.length - 1;
-      controls.voltRange.dataset.scale = JSON.stringify(voltScale);
-      setVoltByIndex(findNearestIndex(voltScale, state.voltDiv), true);
+      controls.voltRange.max = VOLT_SCALE.length - 1;
+      setVoltByIndex(findNearestIndex(VOLT_SCALE, state.voltDiv), true);
     }
 
     function clamp(value, min, max) {
@@ -204,14 +201,10 @@ const indexHTML = `<!DOCTYPE html>
       return values;
     }
 
-    function scaleFromControl(control) {
-      return JSON.parse(control.dataset.scale || '[]');
-    }
-
-    function findNearestIndex(scale, target) {
+    function findNearestIndex(arr, target) {
       let best = 0;
       let diff = Infinity;
-      scale.forEach((value, idx) => {
+      arr.forEach((value, idx) => {
         const d = Math.abs(value - target);
         if (d < diff) {
           diff = d;
@@ -248,31 +241,25 @@ const indexHTML = `<!DOCTYPE html>
     }
 
     function setTimeByIndex(index, skipRender) {
-      const scale = scaleFromControl(controls.timeRange);
-      const idx = clamp(Math.round(index), 0, scale.length - 1);
-      state.timeDiv = scale[idx];
+      const idx = clamp(Math.round(index), 0, TIME_SCALE.length - 1);
+      state.timeDiv = TIME_SCALE[idx];
       controls.timeRange.value = idx;
       controls.timeLabel.textContent = formatTimeDivLabel(state.timeDiv);
-      if (!skipRender) {
-        renderCurrentFrame();
-      }
+      if (!skipRender) renderCurrentFrame();
     }
 
     function setVoltByIndex(index, skipRender) {
-      const scale = scaleFromControl(controls.voltRange);
-      const idx = clamp(Math.round(index), 0, scale.length - 1);
-      state.voltDiv = scale[idx];
+      const idx = clamp(Math.round(index), 0, VOLT_SCALE.length - 1);
+      state.voltDiv = VOLT_SCALE[idx];
       controls.voltRange.value = idx;
       controls.voltLabel.textContent = formatVoltDivLabel(state.voltDiv);
-      if (!skipRender) {
-        renderCurrentFrame();
-      }
+      if (!skipRender) renderCurrentFrame();
     }
 
     function ensureBuffers(count, startIdx) {
       while (ring.buffers.length < count) {
         ring.buffers.push({
-          data: new Uint16Array(RING_CAPACITY),
+          data: new Uint16Array(ring.capacity),
           head: 0,
           size: 0,
           startIdx: startIdx || 0,
@@ -281,24 +268,45 @@ const indexHTML = `<!DOCTYPE html>
       }
     }
 
+    function resetBuffer(buf, startIdx) {
+      buf.head = 0;
+      buf.size = 0;
+      buf.startIdx = startIdx;
+      buf.endIdx = startIdx;
+    }
+
+    function pushSample(buf, absIdx, value) {
+      if (buf.size === 0) {
+        buf.startIdx = absIdx;
+        buf.endIdx = absIdx;
+      }
+      if (absIdx !== buf.endIdx) {
+        resetBuffer(buf, absIdx);
+      }
+      buf.data[buf.head] = value;
+      buf.head = (buf.head + 1) % ring.capacity;
+      if (buf.size < ring.capacity) {
+        buf.size++;
+      } else {
+        buf.startIdx++;
+      }
+      buf.endIdx = buf.startIdx + buf.size;
+    }
+
     function appendSamples(msg) {
       ensureBuffers(msg.samples.length, msg.first_idx);
       msg.samples.forEach((channelSamples, ch) => {
         const buf = ring.buffers[ch];
-        if (buf.size === 0) {
-          buf.startIdx = msg.first_idx;
-          buf.endIdx = msg.first_idx;
+        const msgStart = msg.first_idx;
+        const msgEnd = msg.first_idx + channelSamples.length;
+        if (buf.size === 0 || msgEnd <= buf.startIdx) {
+          resetBuffer(buf, msgStart);
         }
-        for (let i = 0; i < channelSamples.length; i++) {
-          const value = channelSamples[i];
-          buf.data[buf.head] = value;
-          buf.head = (buf.head + 1) % ring.capacity;
-          if (buf.size < ring.capacity) {
-            buf.size++;
-          } else {
-            buf.startIdx++;
-          }
-          buf.endIdx = buf.startIdx + buf.size;
+        const appendFrom = Math.max(msgStart, buf.endIdx);
+        const startOffset = Math.max(0, appendFrom - msg.first_idx);
+        for (let i = startOffset; i < channelSamples.length; i++) {
+          const absIdx = msg.first_idx + i;
+          pushSample(buf, absIdx, channelSamples[i]);
         }
       });
     }
@@ -323,9 +331,9 @@ const indexHTML = `<!DOCTYPE html>
         return data.slice();
       }
       const result = new Array(maxPoints);
-      const ratio = data.length / maxPoints;
+      const ratio = (data.length - 1) / (maxPoints - 1);
       for (let i = 0; i < maxPoints; i++) {
-        const idx = Math.floor(i * ratio);
+        const idx = Math.round(i * ratio);
         result[i] = data[idx];
       }
       return result;
@@ -359,9 +367,10 @@ const indexHTML = `<!DOCTYPE html>
       if (!ring.buffers.length) {
         return;
       }
+      const bits = Math.max(1, state.sampleBits || 8);
+      const maxCount = (1 << bits) - 1;
       const windowSeconds = state.timeDiv * 1e-6 * H_DIVS;
       const neededSamples = Math.max(1, Math.floor(windowSeconds * state.sampleRate));
-      const maxCount = (1 << 8) - 1;
       let minV = state.voltOffset - (state.voltDiv * V_DIVS) / 2;
       let maxV = state.voltOffset + (state.voltDiv * V_DIVS) / 2;
       if (minV < 0) {
@@ -452,8 +461,7 @@ const indexHTML = `<!DOCTYPE html>
       const countsToVolt = FULL_SCALE_V / ((1 << bits) - 1 || 255);
       const p2pVolt = Math.max((max - min) * countsToVolt, 0.01);
       const targetSpanPerDiv = (p2pVolt * 1.3) / V_DIVS;
-      const voltScale = scaleFromControl(controls.voltRange);
-      setVoltByIndex(findNearestIndex(voltScale, targetSpanPerDiv), true);
+      setVoltByIndex(findNearestIndex(VOLT_SCALE, targetSpanPerDiv), true);
       const midVolt = clamp(mid * countsToVolt, 0, FULL_SCALE_V);
       controls.voltOffset.value = midVolt.toFixed(2);
       controls.voltOffsetLabel.textContent = midVolt.toFixed(2) + ' V';
@@ -463,8 +471,7 @@ const indexHTML = `<!DOCTYPE html>
         const periodTime = periodSamples / state.sampleRate;
         const desiredWindow = Math.max(periodTime * 2, periodTime * 1.2);
         const desiredPerDiv = (desiredWindow / H_DIVS) * 1e6;
-        const timeScale = scaleFromControl(controls.timeRange);
-        setTimeByIndex(findNearestIndex(timeScale, desiredPerDiv), true);
+        setTimeByIndex(findNearestIndex(TIME_SCALE, desiredPerDiv), true);
       }
       renderCurrentFrame();
       sendTriggerConfig();
@@ -534,9 +541,8 @@ const indexHTML = `<!DOCTYPE html>
           if (msg.samples && msg.samples.length) {
             appendSamples(msg);
             lastMsg = msg;
-            lastSeq = msg.seq;
-            lastSamplesPerCh = msg.samples_per_ch;
             state.sampleRate = msg.sample_rate || DEFAULT_SAMPLE_RATE;
+            state.sampleBits = msg.sample_bits || 8;
             if (msg.trigger && typeof msg.trigger.index === 'number') {
               lastTriggerInfo = msg.trigger;
               lastTriggerAbsIdx = msg.first_idx + msg.trigger.index;
@@ -571,9 +577,11 @@ const indexHTML = `<!DOCTYPE html>
 </html>`
 
 const (
-	protoHeaderSize  = 0x14
-	defaultPreview   = 8
-	approxSampleRate = 2.4e6 // samples per second per channel
+	protoHeaderSize   = 0x14
+	defaultPreview    = 8
+	approxSampleRate  = 2.4e6 // samples per second per channel
+	ringCapacityPerCh = 1_000_000
+	snapshotSamples   = 4096
 )
 
 type packetHeader struct {
@@ -648,12 +656,235 @@ type wsCommand struct {
 type packetEvent struct {
 	Seq            uint32      `json:"seq"`
 	FirstSampleIdx uint64      `json:"first_idx"`
+	SampleRate     float64     `json:"sample_rate"`
 	Channels       uint16      `json:"channels"`
 	SamplesPerCh   uint16      `json:"samples_per_ch"`
 	SampleBits     uint16      `json:"sample_bits"`
 	Flags          uint16      `json:"flags"`
 	Samples        [][]uint16  `json:"samples"`
 	Trigger        triggerInfo `json:"trigger"`
+}
+
+type channelRing struct {
+	data []uint16
+	head int
+	size int
+}
+
+func newChannelRing(capacity int) *channelRing {
+	return &channelRing{
+		data: make([]uint16, capacity),
+		head: 0,
+		size: 0,
+	}
+}
+
+func (r *channelRing) append(samples []uint16) int {
+	if len(samples) == 0 || len(r.data) == 0 {
+		return 0
+	}
+	dropped := 0
+	for _, v := range samples {
+		if r.size == len(r.data) {
+			dropped++
+		} else {
+			r.size++
+		}
+		r.data[r.head] = v
+		r.head = (r.head + 1) % len(r.data)
+	}
+	return dropped
+}
+
+func (r *channelRing) snapshot(maxSamples int) []uint16 {
+	if r.size == 0 {
+		return nil
+	}
+	if maxSamples > r.size {
+		maxSamples = r.size
+	}
+	out := make([]uint16, maxSamples)
+	start := (r.head - maxSamples + len(r.data)) % len(r.data)
+	for i := 0; i < maxSamples; i++ {
+		out[i] = r.data[(start+i)%len(r.data)]
+	}
+	return out
+}
+
+type sampleBuffer struct {
+	mu          sync.RWMutex
+	rings       []*channelRing
+	startIdx    uint64
+	expectedIdx uint64
+
+	sampleBits uint16
+	channels   uint16
+	lastSeq    uint32
+	lastFlags  uint16
+
+	lastTrigger      triggerInfo
+	lastTriggerAbs   uint64
+	version          atomic.Uint64
+	sampleRate       float64
+	samplesPerPacket uint16
+}
+
+func newSampleBuffer(channels int, capacity int) *sampleBuffer {
+	if channels <= 0 {
+		channels = 1
+	}
+	if capacity <= 0 {
+		capacity = ringCapacityPerCh
+	}
+	rings := make([]*channelRing, channels)
+	for i := range rings {
+		rings[i] = newChannelRing(capacity)
+	}
+	return &sampleBuffer{
+		rings:      rings,
+		startIdx:   0,
+		sampleBits: 8,
+		channels:   uint16(channels),
+		sampleRate: approxSampleRate,
+	}
+}
+
+func (sb *sampleBuffer) reset(startIdx uint64, channels int) {
+	if channels <= 0 {
+		channels = 1
+	}
+	capacity := ringCapacityPerCh
+	if len(sb.rings) > 0 && len(sb.rings[0].data) > 0 {
+		capacity = len(sb.rings[0].data)
+	}
+	rings := make([]*channelRing, channels)
+	for i := range rings {
+		rings[i] = newChannelRing(capacity)
+	}
+	sb.rings = rings
+	sb.startIdx = startIdx
+	sb.expectedIdx = startIdx
+	sb.channels = uint16(channels)
+	sb.version.Add(1)
+}
+
+func (sb *sampleBuffer) appendPacket(h packetHeader, samples [][]uint16, trig triggerInfo) error {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+
+	if len(samples) == 0 {
+		return errors.New("no samples to append")
+	}
+
+	if len(sb.rings) != len(samples) {
+		sb.reset(h.FirstSampleIdx, len(samples))
+	}
+
+	if sb.expectedIdx == 0 && sb.startIdx == 0 {
+		sb.startIdx = h.FirstSampleIdx
+		sb.expectedIdx = h.FirstSampleIdx
+	}
+
+	if h.FirstSampleIdx != sb.expectedIdx {
+		sb.reset(h.FirstSampleIdx, len(samples))
+	}
+
+	var dropped int
+	for ch, r := range sb.rings {
+		if len(samples[ch]) == 0 {
+			continue
+		}
+		if ch == 0 {
+			dropped = r.append(samples[ch])
+		} else {
+			r.append(samples[ch])
+		}
+	}
+
+	if dropped > 0 {
+		sb.startIdx += uint64(dropped)
+	}
+	sb.expectedIdx = h.FirstSampleIdx + uint64(len(samples[0]))
+	sb.sampleBits = h.SampleBits
+	sb.channels = h.Channels
+	sb.lastSeq = h.PacketSeq
+	sb.lastFlags = h.Flags
+	sb.samplesPerPacket = h.SamplesPerCh
+	sb.sampleRate = approxSampleRate
+	sb.lastTrigger = trig
+	sb.lastTriggerAbs = 0
+	if trig.Active && trig.Index >= 0 {
+		sb.lastTriggerAbs = h.FirstSampleIdx + uint64(trig.Index)
+	}
+	sb.version.Add(1)
+	return nil
+}
+
+func (sb *sampleBuffer) snapshot(maxSamples int) (packetEvent, uint64, bool) {
+	sb.mu.RLock()
+	defer sb.mu.RUnlock()
+
+	if len(sb.rings) == 0 || sb.rings[0].size == 0 {
+		return packetEvent{}, 0, false
+	}
+
+	evt := packetEvent{
+		Seq:          sb.lastSeq,
+		SampleRate:   sb.sampleRate,
+		Channels:     uint16(len(sb.rings)),
+		SampleBits:   sb.sampleBits,
+		Flags:        sb.lastFlags,
+		Samples:      make([][]uint16, len(sb.rings)),
+		Trigger:      sb.lastTrigger,
+		SamplesPerCh: 0,
+	}
+
+	firstIdx := sb.startIdx
+	for ch, r := range sb.rings {
+		chSamples := r.snapshot(maxSamples)
+		evt.Samples[ch] = chSamples
+		if len(chSamples) == 0 {
+			continue
+		}
+		if evt.SamplesPerCh == 0 || uint16(len(chSamples)) < evt.SamplesPerCh {
+			evt.SamplesPerCh = uint16(len(chSamples))
+		}
+	}
+
+	if evt.SamplesPerCh == 0 {
+		return packetEvent{}, 0, false
+	}
+
+	// Align all channels to the shortest snapshot to keep time bases consistent.
+	for ch, s := range evt.Samples {
+		if len(s) > int(evt.SamplesPerCh) {
+			evt.Samples[ch] = s[len(s)-int(evt.SamplesPerCh):]
+		}
+	}
+
+	if len(sb.rings) > 0 {
+		currentSize := sb.rings[0].size
+		if currentSize < int(evt.SamplesPerCh) {
+			evt.FirstSampleIdx = firstIdx
+		} else {
+			offset := currentSize - int(evt.SamplesPerCh)
+			evt.FirstSampleIdx = firstIdx + uint64(offset)
+		}
+	} else {
+		evt.FirstSampleIdx = firstIdx
+	}
+	if sb.lastTriggerAbs >= evt.FirstSampleIdx {
+		rel := sb.lastTriggerAbs - evt.FirstSampleIdx
+		if rel < uint64(evt.SamplesPerCh) {
+			evt.Trigger.Index = int(rel)
+		} else {
+			evt.Trigger.Index = -1
+		}
+	} else {
+		evt.Trigger.Index = -1
+	}
+
+	return evt, sb.version.Load(), true
 }
 
 func newTriggerController() *triggerController {
@@ -717,7 +948,7 @@ func (tc *triggerController) ArmSingle() {
 	tc.mu.Unlock()
 }
 
-func (tc *triggerController) Process(h packetHeader, payload []byte) (bool, triggerInfo, error) {
+func (tc *triggerController) Process(h packetHeader, samples [][]uint16) (bool, triggerInfo, error) {
 	tc.mu.RLock()
 	cfg := tc.cfg
 	lastIdx := tc.lastTriggerIdx
@@ -737,33 +968,33 @@ func (tc *triggerController) Process(h packetHeader, payload []byte) (bool, trig
 		return false, infos, nil
 	}
 
-	sampleBytes := int(h.SampleBits / 8)
-	if sampleBytes <= 0 || sampleBytes > 2 {
-		return false, infos, fmt.Errorf("sample bits %d not supported for trigger", h.SampleBits)
-	}
-
 	channel := cfg.Channel
 	if channel < 0 || channel >= int(h.Channels) {
 		channel = 0
 	}
 	infos.Channel = channel
 
-	orig := extractOriginalSamples(payload, h, channel)
-	if len(orig) == 0 {
+	if len(samples) == 0 || len(samples[0]) == 0 {
 		return false, infos, errors.New("empty sample payload")
 	}
+	if channel >= len(samples) {
+		channel = 0
+	}
+	channelSamples := samples[channel]
 
+	if h.SampleBits == 0 {
+		return false, infos, errors.New("invalid sample bits")
+	}
 	maxValue := (1 << h.SampleBits) - 1
 	level := uint16((int(cfg.Level) * maxValue) / 255)
 	infos.Level = level
 
-	sampleCount := int(h.SamplesPerCh)
+	sampleCount := len(channelSamples)
 	var prev uint16
 	found := -1
 
 	for i := 0; i < sampleCount; i++ {
-		start := i * sampleBytes
-		val := uint16(decodeSample(orig[start : start+sampleBytes]))
+		val := channelSamples[i]
 		if i > 0 {
 			switch cfg.Slope {
 			case triggerSlopeRising:
@@ -834,39 +1065,16 @@ func (tc *triggerController) Process(h packetHeader, payload []byte) (bool, trig
 	return shouldSend, infos, nil
 }
 
-type packetStore struct {
-	mu      sync.RWMutex
-	version uint64
-	seq     uint32
-	data    []byte
-}
-
-func (ps *packetStore) Store(seq uint32, data []byte) {
-	ps.mu.Lock()
-	ps.seq = seq
-	ps.data = data
-	ps.version++
-	ps.mu.Unlock()
-}
-
-func (ps *packetStore) Load() (uint64, uint32, []byte) {
-	ps.mu.RLock()
-	v := ps.version
-	seq := ps.seq
-	data := ps.data
-	ps.mu.RUnlock()
-	return v, seq, data
-}
-
 type wsHub struct {
 	mu            sync.Mutex
 	clients       map[*websocket.Conn]struct{}
 	upgrader      websocket.Upgrader
 	frameInterval time.Duration
 	writeTimeout  time.Duration
-	latest        packetStore
 	lastBroadcast atomic.Uint64
 	trigger       *triggerController
+	buffer        *sampleBuffer
+	snapshotSize  int
 }
 
 func newWSHub(fps int, trigger *triggerController) *wsHub {
@@ -890,6 +1098,8 @@ func newWSHub(fps int, trigger *triggerController) *wsHub {
 		frameInterval: interval,
 		writeTimeout:  500 * time.Millisecond,
 		trigger:       trigger,
+		buffer:        newSampleBuffer(1, ringCapacityPerCh),
+		snapshotSize:  snapshotSamples,
 	}
 }
 
@@ -902,6 +1112,15 @@ func (h *wsHub) dispatchLoop() {
 	defer ticker.Stop()
 	for range ticker.C {
 		h.broadcastLatest()
+	}
+}
+
+func (h *wsHub) appendPacket(hdr packetHeader, samples [][]uint16, trig triggerInfo) {
+	if h.buffer == nil {
+		return
+	}
+	if err := h.buffer.appendPacket(hdr, samples, trig); err != nil {
+		log.Printf("buffer append failed seq=%d: %v", hdr.PacketSeq, err)
 	}
 }
 
@@ -972,14 +1191,14 @@ func runUDPReceiver(listenAddr string, dumpPackets bool, hub *wsHub, trigger *tr
 			continue
 		}
 
-		report, err := summarizePayload(header, payload)
+		samples, err := decodePacketSamples(header, payload)
 		if err != nil {
 			log.Printf("payload error from %s seq=%d: %v", remote, header.PacketSeq, err)
 			continue
 		}
 
 		if dumpPackets {
-			log.Println(report)
+			log.Println(summarizeSamples(header, samples))
 		}
 
 		shouldSend := true
@@ -991,7 +1210,7 @@ func runUDPReceiver(listenAddr string, dumpPackets bool, hub *wsHub, trigger *tr
 		}
 		if trigger != nil {
 			var trigErr error
-			shouldSend, trigInfo, trigErr = trigger.Process(header, payload)
+			shouldSend, trigInfo, trigErr = trigger.Process(header, samples)
 			if trigErr != nil {
 				trigInfo.State = "error"
 				log.Printf("trigger processing error seq=%d: %v", header.PacketSeq, trigErr)
@@ -1001,12 +1220,7 @@ func runUDPReceiver(listenAddr string, dumpPackets bool, hub *wsHub, trigger *tr
 			}
 		}
 
-		msg, err := buildPacketEvent(header, payload, trigInfo)
-		if err != nil {
-			log.Printf("event marshal error seq=%d: %v", header.PacketSeq, err)
-			continue
-		}
-		hub.EnqueuePacket(header.PacketSeq, msg)
+		hub.appendPacket(header, samples, trigInfo)
 	}
 }
 
@@ -1033,8 +1247,13 @@ func parsePacket(data []byte) (packetHeader, []byte, error) {
 	}
 
 	sampleBytes := int(h.SampleBits / 8)
-	perChannel := (int(h.SamplesPerCh) * sampleBytes * 2) + sampleBytes
-	expected := perChannel * int(h.Channels)
+	if sampleBytes != 1 {
+		return packetHeader{}, nil, fmt.Errorf("sample bits %d not supported (only 8-bit is supported)", h.SampleBits)
+	}
+
+	origBytes := int(h.SamplesPerCh) * int(h.Channels) * sampleBytes
+	parityBytes := int(h.Channels)
+	expected := (origBytes * 2) + parityBytes
 	if len(payload) != expected {
 		return packetHeader{}, nil, fmt.Errorf("payload mismatch: have %d, expected %d", len(payload), expected)
 	}
@@ -1042,130 +1261,95 @@ func parsePacket(data []byte) (packetHeader, []byte, error) {
 	return h, payload, nil
 }
 
-func summarizePayload(h packetHeader, payload []byte) (string, error) {
+func decodePacketSamples(h packetHeader, payload []byte) ([][]uint16, error) {
 	sampleBytes := int(h.SampleBits / 8)
-	perChannel := (int(h.SamplesPerCh) * sampleBytes * 2) + sampleBytes
-	var sb strings.Builder
+	if sampleBytes != 1 {
+		return nil, fmt.Errorf("sample bits %d not supported (expected 8-bit)", h.SampleBits)
+	}
 
+	totalSamples := int(h.SamplesPerCh) * int(h.Channels)
+	if totalSamples <= 0 {
+		return nil, errors.New("no samples reported")
+	}
+
+	origBytes := totalSamples * sampleBytes
+	dupStart := origBytes
+	dupEnd := dupStart + origBytes
+	parityStart := dupEnd
+	parityEnd := parityStart + int(h.Channels)
+	if parityEnd > len(payload) {
+		return nil, fmt.Errorf("payload too small: have %d need %d", len(payload), parityEnd)
+	}
+
+	orig := payload[:origBytes]
+	dup := payload[dupStart:dupEnd]
+	parity := payload[parityStart:parityEnd]
+
+	if !bytes.Equal(orig, dup) {
+		return nil, errors.New("duplicate block mismatch")
+	}
+
+	if err := verifyParity8(orig, parity, int(h.Channels)); err != nil {
+		return nil, fmt.Errorf("parity %w", err)
+	}
+
+	out := make([][]uint16, h.Channels)
+	for ch := range out {
+		out[ch] = make([]uint16, h.SamplesPerCh)
+	}
+
+	for i := 0; i < totalSamples; i++ {
+		ch := i % int(h.Channels)
+		idx := i / int(h.Channels)
+		out[ch][idx] = uint16(orig[i])
+	}
+
+	return out, nil
+}
+
+func summarizeSamples(h packetHeader, samples [][]uint16) string {
+	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("UDP seq=%d idx=%d ch=%d samples=%d flags=0x%X",
 		h.PacketSeq, h.FirstSampleIdx, h.Channels, h.SamplesPerCh, h.Flags))
 
-	for ch := 0; ch < int(h.Channels); ch++ {
-		offset := ch * perChannel
-		orig := payload[offset : offset+int(h.SamplesPerCh)*sampleBytes]
-		dup := payload[offset+len(orig) : offset+len(orig)*2]
-		parity := payload[offset+len(orig)*2 : offset+perChannel]
-
-		if !bytes.Equal(orig, dup) {
-			sb.WriteString(fmt.Sprintf(" [ch%d duplicate mismatch]", ch))
-		}
-
-		if err := verifyParity(orig, parity, sampleBytes); err != nil {
-			sb.WriteString(fmt.Sprintf(" [ch%d parity %v]", ch, err))
-		}
-
-		preview := previewSamples(orig, sampleBytes, defaultPreview)
+	for ch, data := range samples {
+		preview := previewUint16(data, defaultPreview)
 		sb.WriteString(fmt.Sprintf(" [ch%d first=%v]", ch, preview))
 	}
 
-	return sb.String(), nil
+	return sb.String()
 }
 
-func verifyParity(samples, parity []byte, sampleBytes int) error {
-	if len(parity) != sampleBytes {
-		return fmt.Errorf("parity length %d != sample bytes %d", len(parity), sampleBytes)
+func verifyParity8(samples []byte, parity []byte, channels int) error {
+	if channels <= 0 {
+		return errors.New("channels must be positive")
+	}
+	if len(parity) != channels {
+		return fmt.Errorf("parity length %d != channels %d", len(parity), channels)
 	}
 
-	sum := make([]byte, sampleBytes)
-	for i := 0; i < len(samples); i += sampleBytes {
-		for b := 0; b < sampleBytes; b++ {
-			sum[b] ^= samples[i+b]
-		}
+	sum := make([]byte, channels)
+	for i, b := range samples {
+		sum[i%channels] ^= b
 	}
 
-	for i := range parity {
-		if sum[i] != parity[i] {
-			return fmt.Errorf("expected % X got % X", sum, parity)
+	for ch := 0; ch < channels; ch++ {
+		if sum[ch] != parity[ch] {
+			return fmt.Errorf("ch%d expected 0x%02X got 0x%02X", ch, sum[ch], parity[ch])
 		}
 	}
 	return nil
 }
 
-func previewSamples(samples []byte, sampleBytes int, limit int) []uint32 {
-	total := len(samples) / sampleBytes
-	if limit > total {
-		limit = total
+func previewUint16(samples []uint16, limit int) []uint16 {
+	if limit > len(samples) {
+		limit = len(samples)
 	}
-	out := make([]uint32, 0, limit)
+	out := make([]uint16, 0, limit)
 	for i := 0; i < limit; i++ {
-		start := i * sampleBytes
-		out = append(out, decodeSample(samples[start:start+sampleBytes]))
+		out = append(out, samples[i])
 	}
 	return out
-}
-
-func decodeSample(b []byte) uint32 {
-	var v uint32
-	for i := 0; i < len(b); i++ {
-		v |= uint32(uint8(b[i])) << (8 * i)
-	}
-	return v
-}
-
-func extractOriginalSamples(payload []byte, h packetHeader, channel int) []byte {
-	sampleBytes := int(h.SampleBits / 8)
-	if sampleBytes <= 0 {
-		return nil
-	}
-	perChannel := (int(h.SamplesPerCh) * sampleBytes * 2) + sampleBytes
-	if perChannel <= 0 {
-		return nil
-	}
-	if channel < 0 {
-		channel = 0
-	}
-	if channel >= int(h.Channels) {
-		channel = int(h.Channels) - 1
-	}
-	offset := channel * perChannel
-	start := offset
-	end := offset + int(h.SamplesPerCh)*sampleBytes
-	if start < 0 || end > len(payload) || start >= end {
-		return nil
-	}
-	return payload[start:end]
-}
-
-func buildPacketEvent(h packetHeader, payload []byte, trig triggerInfo) ([]byte, error) {
-	sampleBytes := int(h.SampleBits / 8)
-	if sampleBytes <= 0 || sampleBytes > 2 {
-		return nil, fmt.Errorf("sample bits %d not supported for UI", h.SampleBits)
-	}
-
-	perChannel := (int(h.SamplesPerCh) * sampleBytes * 2) + sampleBytes
-	evt := packetEvent{
-		Seq:            h.PacketSeq,
-		FirstSampleIdx: h.FirstSampleIdx,
-		Channels:       h.Channels,
-		SamplesPerCh:   h.SamplesPerCh,
-		SampleBits:     h.SampleBits,
-		Flags:          h.Flags,
-		Samples:        make([][]uint16, h.Channels),
-		Trigger:        trig,
-	}
-
-	for ch := 0; ch < int(h.Channels); ch++ {
-		offset := ch * perChannel
-		orig := payload[offset : offset+int(h.SamplesPerCh)*sampleBytes]
-		ints := make([]uint16, h.SamplesPerCh)
-		for i := 0; i < int(h.SamplesPerCh); i++ {
-			start := i * sampleBytes
-			ints[i] = uint16(decodeSample(orig[start : start+sampleBytes]))
-		}
-		evt.Samples[ch] = ints
-	}
-
-	return json.Marshal(evt)
 }
 
 func (h *wsHub) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -1184,13 +1368,6 @@ func (h *wsHub) register(conn *websocket.Conn) {
 	total := len(h.clients)
 	h.mu.Unlock()
 	log.Printf("ws client connected (%d total)", total)
-}
-
-func (h *wsHub) EnqueuePacket(seq uint32, data []byte) {
-	if len(data) == 0 {
-		return
-	}
-	h.latest.Store(seq, data)
 }
 
 func (h *wsHub) remove(conn *websocket.Conn) {
@@ -1227,8 +1404,12 @@ func (h *wsHub) readPump(conn *websocket.Conn) {
 }
 
 func (h *wsHub) broadcastLatest() {
-	version, _, data := h.latest.Load()
-	if data == nil || version == 0 {
+	if h.buffer == nil {
+		return
+	}
+
+	evt, version, ok := h.buffer.snapshot(h.snapshotSize)
+	if !ok || version == 0 {
 		return
 	}
 	if version == h.lastBroadcast.Load() {
@@ -1245,6 +1426,12 @@ func (h *wsHub) broadcastLatest() {
 		conns = append(conns, conn)
 	}
 	h.mu.Unlock()
+
+	data, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("ws marshal error: %v", err)
+		return
+	}
 
 	h.lastBroadcast.Store(version)
 	for _, conn := range conns {
