@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "lwip.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -133,8 +134,8 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-
-
+    MX_LWIP_Process();
+    
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

@@ -6,7 +6,6 @@
 #include "adc.hh"
 #include "user.hh"
 #include "main.h"
-#include "lwip.h"
 
 
 #include "stm32f7xx_hal_def.h"
@@ -45,9 +44,9 @@ void UserCppProcess(void)
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
-    if(htim == &htim3){
-        MX_LWIP_Process();
-        UserCppProcess();
+    if(htim == &htim3){ // 4.5kHz Timer
+        // UserCppProcess();
+        
     }
 }
 
