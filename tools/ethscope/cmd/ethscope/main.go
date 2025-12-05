@@ -27,62 +27,377 @@ const indexHTML = `<!DOCTYPE html>
   <style>
     :root { color-scheme: dark; font-family: "Segoe UI", "Pretendard", sans-serif; background: #071323; color: #e5f0ff; }
     body { margin: 0; display: grid; place-items: center; min-height: 100vh; background: radial-gradient(circle at top, rgba(36,74,104,0.6), #050c16 60%); }
-    .card { background: rgba(8, 20, 35, 0.95); border: 1px solid rgba(73, 123, 177, 0.4); border-radius: 18px; padding: 24px 28px 32px; width: min(1080px, 92vw); box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
-    h1 { margin: 0 0 4px; font-size: clamp(24px, 3vw, 32px); letter-spacing: 0.6px; }
-    p { margin: 6px 0 18px; line-height: 1.4; opacity: 0.85; }
+    .card { background: rgba(8, 20, 35, 0.95); border: 1px solid rgba(73, 123, 177, 0.4); border-radius: 18px; padding: 24px 28px 32px; width: min(1100px, 96vw); box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
+    h1 { margin: 0 0 6px; font-size: clamp(24px, 3vw, 32px); letter-spacing: 0.6px; }
+    p { margin: 4px 0 14px; line-height: 1.5; opacity: 0.85; }
     canvas { width: 100%; max-height: 420px; border-radius: 16px; background: #030a14; border: 1px solid rgba(255,255,255,0.04); margin-top: 18px; box-shadow: 0 10px 40px rgba(0,0,0,0.35); }
-    code { background: #0a1d2e; padding: 2px 6px; border-radius: 6px; }
     .status { display: flex; flex-wrap: wrap; gap: 16px; padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px dashed rgba(90,140,200,0.6); font-size: 14px; }
+    .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 18px; }
+    .control { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+    label { font-weight: 600; letter-spacing: 0.2px; }
+    select, input[type="range"], button { border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04); color: #e5f0ff; padding: 8px; font-size: 14px; }
+    input[type="range"] { accent-color: #41dfff; padding: 0; }
+    button { cursor: pointer; transition: background 0.2s ease; }
+    button:hover { background: rgba(65,223,255,0.2); }
     .hint { font-size: 13px; opacity: 0.7; margin-top: 10px; }
+    .inline-value { font-size: 13px; opacity: 0.75; }
+    .control.full { grid-column: span 2; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>F767 이더넷 오실로스코프</h1>
-    <p>Go 기반 수신기/웹서버가 UDP 데이터를 받아 WebSocket으로 브라우저 캔버스에 즉시 그립니다.</p>
+    <p>WebSocket으로 수신한 샘플을 캔버스에 그리고, 시간축/전압축/트리거 파라미터를 즉시 조정합니다. Autoset 버튼은 최근 파형을 분석해 적절한 배율과 트리거를 추천합니다.</p>
     <div class="status">
       <div>서버 상태: <strong id="status">WebSocket 연결 대기</strong></div>
-      <div>표시 샘플: 채널 0, 256샘플 블록 기준</div>
+      <div id="trigger-status">트리거: -</div>
+    </div>
+    <div class="controls">
+      <div class="control">
+        <label for="time-div">시간축 (µs/div)</label>
+        <select id="time-div">
+          <option value="0.2">0.2 µs/div</option>
+          <option value="0.5">0.5 µs/div</option>
+          <option value="1">1 µs/div</option>
+          <option value="2" selected>2 µs/div</option>
+          <option value="5">5 µs/div</option>
+          <option value="10">10 µs/div</option>
+          <option value="20">20 µs/div</option>
+          <option value="50">50 µs/div</option>
+          <option value="100">100 µs/div</option>
+        </select>
+      </div>
+      <div class="control">
+        <label for="volt-div">전압축 (V/div)</label>
+        <select id="volt-div">
+          <option value="0.05">50 mV/div</option>
+          <option value="0.1">100 mV/div</option>
+          <option value="0.2">200 mV/div</option>
+          <option value="0.5" selected>0.5 V/div</option>
+          <option value="1">1 V/div</option>
+          <option value="2">2 V/div</option>
+          <option value="5">5 V/div</option>
+        </select>
+      </div>
+      <div class="control">
+        <label for="volt-offset">전압 오프셋 (V) <span class="inline-value" id="volt-offset-value">1.65 V</span></label>
+        <input type="range" id="volt-offset" min="0" max="3.3" step="0.05" value="1.65" />
+      </div>
+      <div class="control">
+        <label for="trigger-mode">트리거 모드</label>
+        <select id="trigger-mode">
+          <option value="auto">Auto</option>
+          <option value="normal">Normal</option>
+          <option value="single">Single</option>
+        </select>
+      </div>
+      <div class="control">
+        <label for="trigger-slope">슬로프</label>
+        <select id="trigger-slope">
+          <option value="rising">Rising</option>
+          <option value="falling">Falling</option>
+        </select>
+      </div>
+      <div class="control">
+        <label for="trigger-channel">채널</label>
+        <select id="trigger-channel">
+          <option value="0">CH1</option>
+          <option value="1">CH2</option>
+        </select>
+      </div>
+      <div class="control">
+        <label for="trigger-level">트리거 레벨 <span class="inline-value" id="trigger-level-value">128</span></label>
+        <input type="range" id="trigger-level" min="0" max="255" value="128" />
+      </div>
+      <div class="control">
+        <label for="trigger-holdoff">홀드오프 (µs) <span class="inline-value" id="trigger-holdoff-value">5</span></label>
+        <input type="range" id="trigger-holdoff" min="0" max="100" step="1" value="5" />
+      </div>
+      <div class="control">
+        <label>Single 모드</label>
+        <button id="trigger-arm">ARM / FORCE</button>
+      </div>
+      <div class="control full">
+        <label>Auto Set</label>
+        <button id="autoset">AUTOSET</button>
+      </div>
     </div>
     <canvas id="scope" width="960" height="360"></canvas>
-    <p class="hint">UDP 스트림이 들어오면 WebSocket "/ws"가 샘플을 전송하고, 캔버스가 실시간 파형을 그립니다.</p>
+    <p class="hint">상태 표시줄에 현재 time/div, volt/div, 트리거 상태가 표시됩니다. 모바일에서도 동일 UI가 동작합니다.</p>
   </div>
   <script>
   (function() {
+    const SAMPLE_RATE = 2.4e6;
+    const H_DIVS = 10;
+    const V_DIVS = 8;
+    const FULL_SCALE_V = 3.3;
+    const TIME_DIV_VALUES = [0.2, 0.5, 1, 2, 5, 10, 20, 50, 100];
+    const VOLT_DIV_VALUES = [0.05, 0.1, 0.2, 0.5, 1, 2, 5];
+
     const statusEl = document.getElementById('status');
+    const triggerStatusEl = document.getElementById('trigger-status');
     const canvas = document.getElementById('scope');
     const ctx = canvas.getContext('2d');
+    const controls = {
+      timeDiv: document.getElementById('time-div'),
+      voltDiv: document.getElementById('volt-div'),
+      voltOffset: document.getElementById('volt-offset'),
+      voltOffsetLabel: document.getElementById('volt-offset-value'),
+      mode: document.getElementById('trigger-mode'),
+      slope: document.getElementById('trigger-slope'),
+      channel: document.getElementById('trigger-channel'),
+      level: document.getElementById('trigger-level'),
+      levelLabel: document.getElementById('trigger-level-value'),
+      holdoff: document.getElementById('trigger-holdoff'),
+      holdoffLabel: document.getElementById('trigger-holdoff-value'),
+      armBtn: document.getElementById('trigger-arm'),
+      autoset: document.getElementById('autoset'),
+    };
+    const state = {
+      timeDiv: parseFloat(controls.timeDiv.value),
+      voltDiv: parseFloat(controls.voltDiv.value),
+      voltOffset: parseFloat(controls.voltOffset.value),
+    };
+    let lastFrame = { samples: null, bits: 8, trigger: null };
     let reconnectTimer = null;
+    let ws = null;
 
-    function setStatus(text) {
-      statusEl.textContent = text;
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max);
     }
 
-    function drawWave(samples, bits) {
-      if (!samples || !samples.length) {
+    function setStatus(text) {
+      statusEl.textContent = text + ' | ' + controls.timeDiv.value + ' µs/div · ' + controls.voltDiv.value + ' V/div';
+    }
+
+    function setTriggerStatus(text) {
+      triggerStatusEl.textContent = '트리거: ' + text;
+    }
+
+    function sliceForTimebase(samples) {
+      const windowSeconds = state.timeDiv * 1e-6 * H_DIVS;
+      let needed = Math.max(1, Math.floor(windowSeconds * SAMPLE_RATE));
+      if (!Number.isFinite(needed) || needed <= 0) {
+        needed = samples.length;
+      }
+      if (needed > samples.length) {
+        needed = samples.length;
+      }
+      const start = Math.max(0, samples.length - needed);
+      return { subset: samples.slice(start), startIndex: start };
+    }
+
+    function renderCurrentFrame() {
+      const ch = Number(controls.channel.value) || 0;
+      if (!lastFrame.samples || !lastFrame.samples[ch] || !lastFrame.samples[ch].length) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         return;
       }
-      const max = Math.pow(2, bits) - 1 || 255;
+      const bits = lastFrame.bits || 8;
+      const samples = lastFrame.samples[ch];
+      const { subset, startIndex } = sliceForTimebase(samples);
+      const maxCount = Math.pow(2, bits) - 1 || 255;
+      const countsToVolt = FULL_SCALE_V / maxCount;
+      let minV = state.voltOffset - (state.voltDiv * V_DIVS) / 2;
+      let maxV = state.voltOffset + (state.voltDiv * V_DIVS) / 2;
+      if (minV < 0) {
+        maxV = clamp(maxV - minV, 0, FULL_SCALE_V);
+        minV = 0;
+      }
+      if (maxV > FULL_SCALE_V) {
+        minV = clamp(minV - (maxV - FULL_SCALE_V), 0, FULL_SCALE_V);
+        maxV = FULL_SCALE_V;
+      }
+      const spanV = Math.max(0.01, maxV - minV);
+
       ctx.fillStyle = '#020611';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.strokeStyle = '#39e6ff';
       ctx.lineWidth = 2;
       ctx.beginPath();
       for (let x = 0; x < canvas.width; x++) {
-        const idx = Math.floor(x / canvas.width * samples.length);
-        const val = samples[idx] / max;
-        const y = canvas.height - val * canvas.height;
+        const idx = Math.min(subset.length - 1, Math.floor(x / canvas.width * subset.length));
+        const volt = subset[idx] * countsToVolt;
+        const norm = clamp((volt - minV) / spanV, 0, 1);
+        const y = canvas.height - norm * canvas.height;
         if (x === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
+
+      const trig = lastFrame.trigger && lastFrame.trigger.channel === ch ? lastFrame.trigger : null;
+      if (trig && typeof trig.level === 'number') {
+        const levelVolt = (trig.level / maxCount) * FULL_SCALE_V;
+        if (levelVolt >= minV && levelVolt <= maxV) {
+          const levelY = canvas.height - ((levelVolt - minV) / spanV) * canvas.height;
+          ctx.strokeStyle = 'rgba(255, 154, 34, 0.8)';
+          ctx.setLineDash([6, 6]);
+          ctx.beginPath();
+          ctx.moveTo(0, levelY);
+          ctx.lineTo(canvas.width, levelY);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        if (typeof trig.index === 'number') {
+          const rel = trig.index - startIndex;
+          if (rel >= 0 && rel < subset.length) {
+            const x = rel / subset.length * canvas.width;
+            ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, canvas.height);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+
+    function drawWave(samples, bits, trigger) {
+      if (!samples || !samples.length) {
+        lastFrame = { samples: null, bits, trigger };
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        return;
+      }
+      lastFrame = {
+        samples: samples.map((ch) => ch.slice()),
+        bits,
+        trigger: trigger || null,
+      };
+      renderCurrentFrame();
+    }
+
+    function sendTriggerConfig() {
+      const payload = {
+        cmd: 'set_trigger',
+        mode: controls.mode.value,
+        slope: controls.slope.value,
+        level: Number(controls.level.value),
+        holdoff_us: Number(controls.holdoff.value),
+        channel: Number(controls.channel.value),
+      };
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+      }
+    }
+
+    function armSingle() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ cmd: 'arm_single' }));
+      }
+    }
+
+    function handleAutoset() {
+      const ch = Number(controls.channel.value) || 0;
+      if (!lastFrame.samples || !lastFrame.samples[ch] || !lastFrame.samples[ch].length) {
+        return;
+      }
+      const samples = lastFrame.samples[ch];
+      let min = samples[0];
+      let max = samples[0];
+      for (const v of samples) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      const mid = (min + max) / 2;
+      controls.level.value = Math.round(mid);
+      controls.levelLabel.textContent = controls.level.value;
+      controls.mode.value = 'auto';
+      controls.slope.value = 'rising';
+
+      const bits = lastFrame.bits || 8;
+      const countsToVolt = FULL_SCALE_V / (Math.pow(2, bits) - 1 || 255);
+      const p2pVolt = Math.max((max - min) * countsToVolt, 0.01);
+      const targetSpan = p2pVolt * 1.3;
+      let bestVoltDiv = VOLT_DIV_VALUES[VOLT_DIV_VALUES.length - 1];
+      for (const opt of VOLT_DIV_VALUES) {
+        if (opt * V_DIVS >= targetSpan) {
+          bestVoltDiv = opt;
+          break;
+        }
+      }
+      controls.voltDiv.value = bestVoltDiv.toString();
+      state.voltDiv = bestVoltDiv;
+
+      const midVolt = mid * countsToVolt;
+      controls.voltOffset.value = clamp(midVolt, 0, FULL_SCALE_V).toFixed(2);
+      controls.voltOffsetLabel.textContent = parseFloat(controls.voltOffset.value).toFixed(2) + ' V';
+      state.voltOffset = parseFloat(controls.voltOffset.value);
+
+      const periodSamples = estimatePeriod(samples, mid);
+      if (periodSamples) {
+        const periodTime = periodSamples / SAMPLE_RATE;
+        const desiredWindow = Math.max(periodTime * 2, periodTime * 1.2);
+        let bestTimeDiv = TIME_DIV_VALUES[TIME_DIV_VALUES.length - 1];
+        for (const opt of TIME_DIV_VALUES) {
+          if ((opt * 1e-6) * H_DIVS >= desiredWindow) {
+            bestTimeDiv = opt;
+            break;
+          }
+        }
+        controls.timeDiv.value = bestTimeDiv.toString();
+        state.timeDiv = bestTimeDiv;
+      }
+
+      renderCurrentFrame();
+      sendTriggerConfig();
+    }
+
+    function estimatePeriod(samples, threshold) {
+      let first = -1;
+      for (let i = 1; i < samples.length; i++) {
+        if (samples[i - 1] < threshold && samples[i] >= threshold) {
+          if (first === -1) {
+            first = i;
+          } else {
+            return i - first;
+          }
+        }
+      }
+      return null;
+    }
+
+    function attachControlEvents() {
+      controls.timeDiv.addEventListener('change', () => {
+        state.timeDiv = parseFloat(controls.timeDiv.value);
+        renderCurrentFrame();
+      });
+      controls.voltDiv.addEventListener('change', () => {
+        state.voltDiv = parseFloat(controls.voltDiv.value);
+        renderCurrentFrame();
+      });
+      controls.voltOffset.addEventListener('input', () => {
+        state.voltOffset = parseFloat(controls.voltOffset.value);
+        controls.voltOffsetLabel.textContent = state.voltOffset.toFixed(2) + ' V';
+        renderCurrentFrame();
+      });
+      controls.mode.addEventListener('change', sendTriggerConfig);
+      controls.slope.addEventListener('change', sendTriggerConfig);
+      controls.channel.addEventListener('change', () => {
+        sendTriggerConfig();
+        renderCurrentFrame();
+      });
+      controls.level.addEventListener('input', () => {
+        controls.levelLabel.textContent = controls.level.value;
+        sendTriggerConfig();
+      });
+      controls.holdoff.addEventListener('input', () => {
+        controls.holdoffLabel.textContent = controls.holdoff.value;
+        sendTriggerConfig();
+      });
+      controls.armBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        armSingle();
+      });
+      controls.autoset.addEventListener('click', (e) => {
+        e.preventDefault();
+        handleAutoset();
+      });
     }
 
     function connect() {
       const url = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') +
                   window.location.host + '/ws';
-      const ws = new WebSocket(url);
+      ws = new WebSocket(url);
 
       ws.onopen = () => {
         setStatus('WebSocket 연결됨 · 샘플 대기 중');
@@ -90,14 +405,19 @@ const indexHTML = `<!DOCTYPE html>
           clearTimeout(reconnectTimer);
           reconnectTimer = null;
         }
+        sendTriggerConfig();
       };
 
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
           if (msg.samples && msg.samples.length) {
-            drawWave(msg.samples[0], msg.sample_bits || 8);
-            setStatus('seq ' + msg.seq + ' · ' + msg.samples_per_ch + ' samples');
+            drawWave(msg.samples, msg.sample_bits || 8, msg.trigger);
+            const trigState = msg.trigger && msg.trigger.state ? msg.trigger.state : 'auto';
+            const info = trigState + ' · ' + msg.samples_per_ch + ' samples';
+            setStatus('seq ' + msg.seq + ' · ' + info);
+            const trigMode = msg.trigger && msg.trigger.mode ? msg.trigger.mode.toUpperCase() : 'AUTO';
+            setTriggerStatus(trigState + ' @ ' + trigMode);
           }
         } catch (err) {
           console.error('invalid ws message', err);
@@ -106,6 +426,7 @@ const indexHTML = `<!DOCTYPE html>
 
       ws.onclose = () => {
         setStatus('연결 끊김 · 재연결 시도 중…');
+        setTriggerStatus('재연결 중');
         reconnectTimer = setTimeout(connect, 1500);
       };
 
@@ -114,6 +435,7 @@ const indexHTML = `<!DOCTYPE html>
       };
     }
 
+    attachControlEvents();
     connect();
   })();
   </script>
@@ -121,8 +443,9 @@ const indexHTML = `<!DOCTYPE html>
 </html>`
 
 const (
-	protoHeaderSize = 0x14
-	defaultPreview  = 8
+	protoHeaderSize  = 0x14
+	defaultPreview   = 8
+	approxSampleRate = 2.4e6 // samples per second per channel
 )
 
 type packetHeader struct {
@@ -134,14 +457,253 @@ type packetHeader struct {
 	SampleBits     uint16
 }
 
+type triggerMode string
+
+const (
+	triggerModeAuto   triggerMode = "auto"
+	triggerModeNormal triggerMode = "normal"
+	triggerModeSingle triggerMode = "single"
+)
+
+type triggerSlope string
+
+const (
+	triggerSlopeRising  triggerSlope = "rising"
+	triggerSlopeFalling triggerSlope = "falling"
+)
+
+type triggerConfig struct {
+	Mode      triggerMode
+	Slope     triggerSlope
+	Level     uint8   // 0-255 slider range
+	HoldoffUs float64 // microseconds
+	Channel   int
+}
+
+type triggerInfo struct {
+	Mode      string  `json:"mode"`
+	Slope     string  `json:"slope"`
+	Level     uint16  `json:"level"`
+	HoldoffUs float64 `json:"holdoff_us"`
+	Channel   int     `json:"channel"`
+	State     string  `json:"state"`
+	Active    bool    `json:"active"`
+	Index     int     `json:"index"`
+}
+
+type triggerController struct {
+	mu             sync.RWMutex
+	cfg            triggerConfig
+	lastTriggerIdx uint64
+	singleArmed    bool
+	sampleRate     float64
+}
+
+type triggerUpdate struct {
+	Mode      string  `json:"mode"`
+	Slope     string  `json:"slope"`
+	Level     float64 `json:"level"`
+	HoldoffUs float64 `json:"holdoff_us"`
+	Channel   int     `json:"channel"`
+}
+
+type wsCommand struct {
+	Cmd string `json:"cmd"`
+
+	Mode      string  `json:"mode,omitempty"`
+	Slope     string  `json:"slope,omitempty"`
+	Level     float64 `json:"level,omitempty"`
+	HoldoffUs float64 `json:"holdoff_us,omitempty"`
+	Channel   int     `json:"channel,omitempty"`
+}
+
 type packetEvent struct {
-	Seq            uint32     `json:"seq"`
-	FirstSampleIdx uint64     `json:"first_idx"`
-	Channels       uint16     `json:"channels"`
-	SamplesPerCh   uint16     `json:"samples_per_ch"`
-	SampleBits     uint16     `json:"sample_bits"`
-	Flags          uint16     `json:"flags"`
-	Samples        [][]uint16 `json:"samples"`
+	Seq            uint32      `json:"seq"`
+	FirstSampleIdx uint64      `json:"first_idx"`
+	Channels       uint16      `json:"channels"`
+	SamplesPerCh   uint16      `json:"samples_per_ch"`
+	SampleBits     uint16      `json:"sample_bits"`
+	Flags          uint16      `json:"flags"`
+	Samples        [][]uint16  `json:"samples"`
+	Trigger        triggerInfo `json:"trigger"`
+}
+
+func newTriggerController() *triggerController {
+	return &triggerController{
+		cfg: triggerConfig{
+			Mode:      triggerModeAuto,
+			Slope:     triggerSlopeRising,
+			Level:     128,
+			HoldoffUs: 5,
+			Channel:   0,
+		},
+		singleArmed: true,
+		sampleRate:  approxSampleRate,
+	}
+}
+
+func (tc *triggerController) Config() triggerConfig {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.cfg
+}
+
+func (tc *triggerController) Update(upd triggerUpdate) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	if upd.Mode != "" {
+		switch triggerMode(upd.Mode) {
+		case triggerModeAuto, triggerModeNormal, triggerModeSingle:
+			tc.cfg.Mode = triggerMode(upd.Mode)
+			if tc.cfg.Mode != triggerModeSingle {
+				tc.singleArmed = true
+			} else {
+				tc.singleArmed = false
+			}
+		}
+	}
+	if upd.Slope != "" {
+		switch triggerSlope(upd.Slope) {
+		case triggerSlopeRising, triggerSlopeFalling:
+			tc.cfg.Slope = triggerSlope(upd.Slope)
+		}
+	}
+	if upd.Level >= 0 {
+		if upd.Level > 255 {
+			upd.Level = 255
+		}
+		tc.cfg.Level = uint8(upd.Level)
+	}
+	if upd.HoldoffUs >= 0 {
+		tc.cfg.HoldoffUs = upd.HoldoffUs
+	}
+	if upd.Channel >= 0 {
+		tc.cfg.Channel = upd.Channel
+	}
+}
+
+func (tc *triggerController) ArmSingle() {
+	tc.mu.Lock()
+	tc.singleArmed = true
+	tc.mu.Unlock()
+}
+
+func (tc *triggerController) Process(h packetHeader, payload []byte) (bool, triggerInfo, error) {
+	tc.mu.RLock()
+	cfg := tc.cfg
+	lastIdx := tc.lastTriggerIdx
+	singleArmed := tc.singleArmed
+	tc.mu.RUnlock()
+
+	infos := triggerInfo{
+		Mode:      string(cfg.Mode),
+		Slope:     string(cfg.Slope),
+		HoldoffUs: cfg.HoldoffUs,
+		Channel:   cfg.Channel,
+		Index:     -1,
+	}
+
+	if cfg.Mode == triggerModeSingle && !singleArmed {
+		infos.State = "latched"
+		return false, infos, nil
+	}
+
+	sampleBytes := int(h.SampleBits / 8)
+	if sampleBytes <= 0 || sampleBytes > 2 {
+		return false, infos, fmt.Errorf("sample bits %d not supported for trigger", h.SampleBits)
+	}
+
+	channel := cfg.Channel
+	if channel < 0 || channel >= int(h.Channels) {
+		channel = 0
+	}
+	infos.Channel = channel
+
+	orig := extractOriginalSamples(payload, h, channel)
+	if len(orig) == 0 {
+		return false, infos, errors.New("empty sample payload")
+	}
+
+	maxValue := (1 << h.SampleBits) - 1
+	level := uint16((int(cfg.Level) * maxValue) / 255)
+	infos.Level = level
+
+	sampleCount := int(h.SamplesPerCh)
+	var prev uint16
+	found := -1
+
+	for i := 0; i < sampleCount; i++ {
+		start := i * sampleBytes
+		val := uint16(decodeSample(orig[start : start+sampleBytes]))
+		if i > 0 {
+			switch cfg.Slope {
+			case triggerSlopeRising:
+				if prev < level && val >= level {
+					found = i
+				}
+			case triggerSlopeFalling:
+				if prev > level && val <= level {
+					found = i
+				}
+			}
+			if found != -1 {
+				break
+			}
+		}
+		prev = val
+	}
+
+	holdoffSamples := uint64(cfg.HoldoffUs * tc.sampleRate / 1e6)
+	shouldSend := true
+
+	if found == -1 {
+		switch cfg.Mode {
+		case triggerModeAuto:
+			infos.State = "auto"
+			shouldSend = true
+		case triggerModeNormal:
+			infos.State = "waiting"
+			shouldSend = false
+		case triggerModeSingle:
+			if singleArmed {
+				infos.State = "armed"
+			} else {
+				infos.State = "latched"
+			}
+			shouldSend = false
+		}
+		return shouldSend, infos, nil
+	}
+
+	absoluteIdx := h.FirstSampleIdx + uint64(found)
+	if holdoffSamples > 0 && absoluteIdx-lastIdx < holdoffSamples {
+		infos.State = "holdoff"
+		switch cfg.Mode {
+		case triggerModeAuto:
+			shouldSend = true
+		case triggerModeNormal, triggerModeSingle:
+			shouldSend = false
+		}
+		return shouldSend, infos, nil
+	}
+
+	infos.Active = true
+	infos.Index = found
+	infos.State = "triggered"
+
+	tc.mu.Lock()
+	tc.lastTriggerIdx = absoluteIdx
+	if cfg.Mode == triggerModeSingle {
+		if singleArmed {
+			tc.singleArmed = false
+		} else {
+			shouldSend = false
+		}
+	}
+	tc.mu.Unlock()
+
+	return shouldSend, infos, nil
 }
 
 type packetStore struct {
@@ -176,9 +738,10 @@ type wsHub struct {
 	writeTimeout  time.Duration
 	latest        packetStore
 	lastBroadcast atomic.Uint64
+	trigger       *triggerController
 }
 
-func newWSHub(fps int) *wsHub {
+func newWSHub(fps int, trigger *triggerController) *wsHub {
 	if fps <= 0 {
 		fps = 30
 	}
@@ -198,6 +761,7 @@ func newWSHub(fps int) *wsHub {
 		},
 		frameInterval: interval,
 		writeTimeout:  500 * time.Millisecond,
+		trigger:       trigger,
 	}
 }
 
@@ -220,11 +784,13 @@ func main() {
 	uiFPS := flag.Int("ui-fps", 60, "maximum WebSocket frame rate (frames per second)")
 	flag.Parse()
 
-	hub := newWSHub(*uiFPS)
+	triggerCtl := newTriggerController()
+
+	hub := newWSHub(*uiFPS, triggerCtl)
 	hub.Start()
 
 	go func() {
-		if err := runUDPReceiver(*udpListen, *dumpPackets, hub); err != nil {
+		if err := runUDPReceiver(*udpListen, *dumpPackets, hub, triggerCtl); err != nil {
 			log.Fatalf("udp receiver stopped: %v", err)
 		}
 	}()
@@ -247,7 +813,7 @@ func main() {
 	}
 }
 
-func runUDPReceiver(listenAddr string, dumpPackets bool, hub *wsHub) error {
+func runUDPReceiver(listenAddr string, dumpPackets bool, hub *wsHub, trigger *triggerController) error {
 	udpAddr, err := net.ResolveUDPAddr("udp", listenAddr)
 	if err != nil {
 		return fmt.Errorf("resolve udp addr: %w", err)
@@ -288,9 +854,31 @@ func runUDPReceiver(listenAddr string, dumpPackets bool, hub *wsHub) error {
 			log.Println(report)
 		}
 
-		if err := hub.BroadcastPacket(header, payload); err != nil {
-			log.Printf("ws broadcast error seq=%d: %v", header.PacketSeq, err)
+		shouldSend := true
+		trigInfo := triggerInfo{
+			Mode:  string(triggerModeAuto),
+			Slope: string(triggerSlopeRising),
+			Index: -1,
+			State: "passthrough",
 		}
+		if trigger != nil {
+			var trigErr error
+			shouldSend, trigInfo, trigErr = trigger.Process(header, payload)
+			if trigErr != nil {
+				trigInfo.State = "error"
+				log.Printf("trigger processing error seq=%d: %v", header.PacketSeq, trigErr)
+			}
+			if !shouldSend {
+				continue
+			}
+		}
+
+		msg, err := buildPacketEvent(header, payload, trigInfo)
+		if err != nil {
+			log.Printf("event marshal error seq=%d: %v", header.PacketSeq, err)
+			continue
+		}
+		hub.EnqueuePacket(header.PacketSeq, msg)
 	}
 }
 
@@ -396,7 +984,31 @@ func decodeSample(b []byte) uint32 {
 	return v
 }
 
-func buildPacketEvent(h packetHeader, payload []byte) ([]byte, error) {
+func extractOriginalSamples(payload []byte, h packetHeader, channel int) []byte {
+	sampleBytes := int(h.SampleBits / 8)
+	if sampleBytes <= 0 {
+		return nil
+	}
+	perChannel := (int(h.SamplesPerCh) * sampleBytes * 2) + sampleBytes
+	if perChannel <= 0 {
+		return nil
+	}
+	if channel < 0 {
+		channel = 0
+	}
+	if channel >= int(h.Channels) {
+		channel = int(h.Channels) - 1
+	}
+	offset := channel * perChannel
+	start := offset
+	end := offset + int(h.SamplesPerCh)*sampleBytes
+	if start < 0 || end > len(payload) || start >= end {
+		return nil
+	}
+	return payload[start:end]
+}
+
+func buildPacketEvent(h packetHeader, payload []byte, trig triggerInfo) ([]byte, error) {
 	sampleBytes := int(h.SampleBits / 8)
 	if sampleBytes <= 0 || sampleBytes > 2 {
 		return nil, fmt.Errorf("sample bits %d not supported for UI", h.SampleBits)
@@ -411,6 +1023,7 @@ func buildPacketEvent(h packetHeader, payload []byte) ([]byte, error) {
 		SampleBits:     h.SampleBits,
 		Flags:          h.Flags,
 		Samples:        make([][]uint16, h.Channels),
+		Trigger:        trig,
 	}
 
 	for ch := 0; ch < int(h.Channels); ch++ {
@@ -445,6 +1058,13 @@ func (h *wsHub) register(conn *websocket.Conn) {
 	log.Printf("ws client connected (%d total)", total)
 }
 
+func (h *wsHub) EnqueuePacket(seq uint32, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	h.latest.Store(seq, data)
+}
+
 func (h *wsHub) remove(conn *websocket.Conn) {
 	h.mu.Lock()
 	if _, ok := h.clients[conn]; ok {
@@ -465,27 +1085,17 @@ func (h *wsHub) readPump(conn *websocket.Conn) {
 		return nil
 	})
 	for {
-		if _, _, err := conn.ReadMessage(); err != nil {
+		msgType, data, err := conn.ReadMessage()
+		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("ws read error: %v", err)
 			}
 			break
 		}
+		if msgType == websocket.TextMessage {
+			h.handleCommand(data)
+		}
 	}
-}
-
-func (h *wsHub) BroadcastPacket(header packetHeader, payload []byte) error {
-	if h == nil {
-		return nil
-	}
-
-	msg, err := buildPacketEvent(header, payload)
-	if err != nil {
-		return err
-	}
-
-	h.latest.Store(header.PacketSeq, msg)
-	return nil
 }
 
 func (h *wsHub) broadcastLatest() {
@@ -515,5 +1125,33 @@ func (h *wsHub) broadcastLatest() {
 			h.remove(conn)
 			log.Printf("ws write error: %v", err)
 		}
+	}
+}
+
+func (h *wsHub) handleCommand(data []byte) {
+	if h.trigger == nil {
+		return
+	}
+
+	var cmd wsCommand
+	if err := json.Unmarshal(data, &cmd); err != nil {
+		log.Printf("ws command decode error: %v", err)
+		return
+	}
+
+	switch cmd.Cmd {
+	case "set_trigger":
+		update := triggerUpdate{
+			Mode:      cmd.Mode,
+			Slope:     cmd.Slope,
+			Level:     cmd.Level,
+			HoldoffUs: cmd.HoldoffUs,
+			Channel:   cmd.Channel,
+		}
+		h.trigger.Update(update)
+	case "arm_single":
+		h.trigger.ArmSingle()
+	default:
+		log.Printf("ws unknown command: %s", cmd.Cmd)
 	}
 }
