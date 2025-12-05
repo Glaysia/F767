@@ -45,8 +45,7 @@ void UserCppProcess(void)
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
     if(htim == &htim3){ // 4.5kHz Timer
-        // UserCppProcess();
-        
+        UserCppProcess();
     }
 }
 

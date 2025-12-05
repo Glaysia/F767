@@ -64,12 +64,15 @@ bool EthStream::SendFrame(const uint16_t *samples, size_t sample_count, uint16_t
     }
 
     const size_t sample_bytes = (kEthStreamSampleBits + 7U) / 8U;
-    if (sample_bytes == 0U)
+    if (sample_bytes != sizeof(uint8_t))
     {
         return false;
     }
     const uint16_t samples_per_ch = (uint16_t)(sample_count / kEthStreamChannels);
-    const size_t payload_bytes = sample_count * sample_bytes;
+    const size_t original_payload_bytes = sample_count * sample_bytes;
+    const size_t duplicate_bytes = original_payload_bytes;
+    const size_t parity_bytes = kEthStreamChannels;
+    const size_t payload_bytes = original_payload_bytes + duplicate_bytes + parity_bytes;
     const size_t total_bytes = sizeof(EthPacketHeader) + payload_bytes;
 
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)total_bytes, PBUF_RAM);
@@ -95,16 +98,26 @@ bool EthStream::SendFrame(const uint16_t *samples, size_t sample_count, uint16_t
     first_sample_index += (uint64_t)samples_per_ch;
 
     uint8_t *payload = reinterpret_cast<uint8_t *>(p->payload) + sizeof(EthPacketHeader);
-    if (sample_bytes == sizeof(uint16_t))
+    uint8_t *original_base = payload;
+    uint8_t parity[kEthStreamChannels];
+    memset(parity, 0, sizeof(parity));
+
+    for (size_t i = 0; i < sample_count; ++i)
     {
-        memcpy(payload, samples, payload_bytes);
+        const uint8_t sample_val = (uint8_t)(samples[i] & 0xFFU);
+        original_base[i] = sample_val;
+
+        const size_t channel = i % kEthStreamChannels;
+        parity[channel] ^= sample_val;
     }
-    else
+
+    uint8_t *duplicate_base = original_base + original_payload_bytes;
+    memcpy(duplicate_base, original_base, original_payload_bytes);
+
+    uint8_t *parity_base = duplicate_base + duplicate_bytes;
+    for (size_t ch = 0; ch < kEthStreamChannels; ++ch)
     {
-        for (size_t i = 0; i < sample_count; ++i)
-        {
-            payload[i] = (uint8_t)(samples[i] & 0xFFU);
-        }
+        parity_base[ch] = parity[ch];
     }
 
     const err_t err = udp_send(udp, p);
