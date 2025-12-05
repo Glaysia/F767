@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -37,9 +41,30 @@ const indexHTML = `<!DOCTYPE html>
 </body>
 </html>`
 
+const (
+	protoHeaderSize = 0x14
+	defaultPreview  = 8
+)
+
+type packetHeader struct {
+	PacketSeq      uint32
+	FirstSampleIdx uint64
+	Channels       uint16
+	SamplesPerCh   uint16
+	Flags          uint16
+	SampleBits     uint16
+}
+
 func main() {
 	listen := flag.String("listen", ":8080", "HTTP listen address, e.g. :8080 or 0.0.0.0:8080")
+	udpListen := flag.String("udp", ":5000", "UDP listen address for ADC packets")
 	flag.Parse()
+
+	go func() {
+		if err := runUDPReceiver(*udpListen); err != nil {
+			log.Fatalf("udp receiver stopped: %v", err)
+		}
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -52,8 +77,151 @@ func main() {
 		addr = "localhost" + addr
 	}
 
-	log.Printf("Serving placeholder UI at http://%s\n", addr)
+	log.Printf("Serving placeholder UI at http://%s (UDP listener on %s)\n", addr, *udpListen)
 	if err := http.ListenAndServe(*listen, mux); err != nil {
 		log.Fatalf("http server failed: %v", err)
 	}
+}
+
+func runUDPReceiver(listenAddr string) error {
+	udpAddr, err := net.ResolveUDPAddr("udp", listenAddr)
+	if err != nil {
+		return fmt.Errorf("resolve udp addr: %w", err)
+	}
+
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return fmt.Errorf("listen udp: %w", err)
+	}
+	defer conn.Close()
+
+	log.Printf("UDP receiver listening on %s", conn.LocalAddr())
+	buffer := make([]byte, 65536)
+
+	for {
+		n, remote, err := conn.ReadFromUDP(buffer)
+		if err != nil {
+			return fmt.Errorf("udp read: %w", err)
+		}
+		if n == 0 {
+			continue
+		}
+
+		data := buffer[:n]
+		header, payload, err := parsePacket(data)
+		if err != nil {
+			log.Printf("invalid packet from %s: %v", remote, err)
+			continue
+		}
+
+		report, err := summarizePayload(header, payload)
+		if err != nil {
+			log.Printf("payload error from %s seq=%d: %v", remote, header.PacketSeq, err)
+			continue
+		}
+
+		log.Println(report)
+	}
+}
+
+func parsePacket(data []byte) (packetHeader, []byte, error) {
+	if len(data) < protoHeaderSize {
+		return packetHeader{}, nil, fmt.Errorf("packet too small: %d bytes", len(data))
+	}
+
+	h := packetHeader{
+		PacketSeq:      binary.LittleEndian.Uint32(data[0:4]),
+		FirstSampleIdx: binary.LittleEndian.Uint64(data[4:12]),
+		Channels:       binary.LittleEndian.Uint16(data[12:14]),
+		SamplesPerCh:   binary.LittleEndian.Uint16(data[14:16]),
+		Flags:          binary.LittleEndian.Uint16(data[16:18]),
+		SampleBits:     binary.LittleEndian.Uint16(data[18:20]),
+	}
+
+	payload := data[protoHeaderSize:]
+	if h.Channels == 0 {
+		return packetHeader{}, nil, errors.New("header reports zero channels")
+	}
+	if h.SampleBits == 0 || h.SampleBits%8 != 0 {
+		return packetHeader{}, nil, fmt.Errorf("unsupported sample bits: %d", h.SampleBits)
+	}
+
+	sampleBytes := int(h.SampleBits / 8)
+	perChannel := (int(h.SamplesPerCh) * sampleBytes * 2) + sampleBytes
+	expected := perChannel * int(h.Channels)
+	if len(payload) != expected {
+		return packetHeader{}, nil, fmt.Errorf("payload mismatch: have %d, expected %d", len(payload), expected)
+	}
+
+	return h, payload, nil
+}
+
+func summarizePayload(h packetHeader, payload []byte) (string, error) {
+	sampleBytes := int(h.SampleBits / 8)
+	perChannel := (int(h.SamplesPerCh) * sampleBytes * 2) + sampleBytes
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("UDP seq=%d idx=%d ch=%d samples=%d flags=0x%X",
+		h.PacketSeq, h.FirstSampleIdx, h.Channels, h.SamplesPerCh, h.Flags))
+
+	for ch := 0; ch < int(h.Channels); ch++ {
+		offset := ch * perChannel
+		orig := payload[offset : offset+int(h.SamplesPerCh)*sampleBytes]
+		dup := payload[offset+len(orig) : offset+len(orig)*2]
+		parity := payload[offset+len(orig)*2 : offset+perChannel]
+
+		if !bytes.Equal(orig, dup) {
+			sb.WriteString(fmt.Sprintf(" [ch%d duplicate mismatch]", ch))
+		}
+
+		if err := verifyParity(orig, parity, sampleBytes); err != nil {
+			sb.WriteString(fmt.Sprintf(" [ch%d parity %v]", ch, err))
+		}
+
+		preview := previewSamples(orig, sampleBytes, defaultPreview)
+		sb.WriteString(fmt.Sprintf(" [ch%d first=%v]", ch, preview))
+	}
+
+	return sb.String(), nil
+}
+
+func verifyParity(samples, parity []byte, sampleBytes int) error {
+	if len(parity) != sampleBytes {
+		return fmt.Errorf("parity length %d != sample bytes %d", len(parity), sampleBytes)
+	}
+
+	sum := make([]byte, sampleBytes)
+	for i := 0; i < len(samples); i += sampleBytes {
+		for b := 0; b < sampleBytes; b++ {
+			sum[b] ^= samples[i+b]
+		}
+	}
+
+	for i := range parity {
+		if sum[i] != parity[i] {
+			return fmt.Errorf("expected % X got % X", sum, parity)
+		}
+	}
+	return nil
+}
+
+func previewSamples(samples []byte, sampleBytes int, limit int) []uint32 {
+	total := len(samples) / sampleBytes
+	if limit > total {
+		limit = total
+	}
+	out := make([]uint32, 0, limit)
+	for i := 0; i < limit; i++ {
+		start := i * sampleBytes
+		out = append(out, decodeSample(samples[start:start+sampleBytes]))
+	}
+	return out
+}
+
+func decodeSample(b []byte) uint32 {
+	var v uint32
+	for i := 0; i < len(b); i++ {
+		v |= uint32(uint8(b[i])) << (8 * i)
+	}
+	return v
 }
