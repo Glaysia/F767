@@ -116,8 +116,9 @@ const indexHTML = `<!DOCTYPE html>
     const H_DIVS = 10;
     const V_DIVS = 8;
     const FULL_SCALE_V = 3.3;
-    const TIME_SCALE = build125Scale(0.1, 100000);
-    const VOLT_SCALE = build125Scale(0.01, 10);
+    const RING_CAPACITY = 500000;
+    const MAX_DISPLAY_POINTS = 2048;
+    const CHANNEL_COLORS = ['#ffd447', '#4fb7ff', '#8df5ff', '#ff7ceb'];
 
     const statusEl = document.getElementById('status');
     const triggerStatusEl = document.getElementById('trigger-status');
@@ -146,7 +147,15 @@ const indexHTML = `<!DOCTYPE html>
       voltOffset: parseFloat(controls.voltOffset.value),
       sampleRate: DEFAULT_SAMPLE_RATE,
     };
-    let lastFrame = { samples: null, bits: 8, trigger: null };
+    const ring = {
+      buffers: [],
+      capacity: RING_CAPACITY,
+    };
+    let lastMsg = null;
+    let lastSeq = 0;
+    let lastSamplesPerCh = 0;
+    let lastTriggerInfo = null;
+    let lastTriggerAbsIdx = null;
     let reconnectTimer = null;
     let ws = null;
 
@@ -155,13 +164,17 @@ const indexHTML = `<!DOCTYPE html>
     connect();
 
     function initializeRangeControls() {
+      const timeScale = build125Scale(0.1, 100000);
+      const voltScale = build125Scale(0.01, 10);
       controls.timeRange.min = 0;
-      controls.timeRange.max = TIME_SCALE.length - 1;
-      setTimeByIndex(findNearestIndex(TIME_SCALE, state.timeDiv), true);
+      controls.timeRange.max = timeScale.length - 1;
+      controls.timeRange.dataset.scale = JSON.stringify(timeScale);
+      setTimeByIndex(findNearestIndex(timeScale, state.timeDiv), true);
 
       controls.voltRange.min = 0;
-      controls.voltRange.max = VOLT_SCALE.length - 1;
-      setVoltByIndex(findNearestIndex(VOLT_SCALE, state.voltDiv), true);
+      controls.voltRange.max = voltScale.length - 1;
+      controls.voltRange.dataset.scale = JSON.stringify(voltScale);
+      setVoltByIndex(findNearestIndex(voltScale, state.voltDiv), true);
     }
 
     function clamp(value, min, max) {
@@ -171,9 +184,8 @@ const indexHTML = `<!DOCTYPE html>
     function build125Scale(min, max) {
       const steps = [1, 2, 5];
       const values = [];
-      let exponent = Math.floor(Math.log10(min));
-      let decade = Math.pow(10, exponent);
-      while (true) {
+      let decade = Math.pow(10, Math.floor(Math.log10(min)));
+      while (values.length === 0 || values[values.length - 1] < max) {
         for (const step of steps) {
           const val = Number((step * decade).toPrecision(6));
           if (val < min - 1e-9) {
@@ -189,12 +201,17 @@ const indexHTML = `<!DOCTYPE html>
         }
         decade *= 10;
       }
+      return values;
     }
 
-    function findNearestIndex(arr, target) {
+    function scaleFromControl(control) {
+      return JSON.parse(control.dataset.scale || '[]');
+    }
+
+    function findNearestIndex(scale, target) {
       let best = 0;
       let diff = Infinity;
-      arr.forEach((value, idx) => {
+      scale.forEach((value, idx) => {
         const d = Math.abs(value - target);
         if (d < diff) {
           diff = d;
@@ -205,24 +222,21 @@ const indexHTML = `<!DOCTYPE html>
     }
 
     function formatTimeDivLabel(value) {
-      const num = Number(value);
-      if (!Number.isFinite(num)) return '—';
-      if (num >= 1000) {
-        const ms = num / 1000;
+      if (value >= 1000) {
+        const ms = value / 1000;
         return (Number.isInteger(ms) ? ms.toFixed(0) : ms.toFixed(2)) + ' ms/div';
       }
-      if (num >= 1) {
-        return (Number.isInteger(num) ? num.toFixed(0) : num.toString()) + ' µs/div';
+      if (value >= 1) {
+        return (Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2)) + ' µs/div';
       }
-      return num.toFixed(2) + ' µs/div';
+      return value.toFixed(2) + ' µs/div';
     }
 
     function formatVoltDivLabel(value) {
-      const num = Number(value);
-      if (num >= 1) {
-        return num.toFixed(2) + ' V/div';
+      if (value >= 1) {
+        return value.toFixed(2) + ' V/div';
       }
-      return (num * 1000).toFixed(0) + ' mV/div';
+      return (value * 1000).toFixed(0) + ' mV/div';
     }
 
     function setStatus(text) {
@@ -234,57 +248,120 @@ const indexHTML = `<!DOCTYPE html>
     }
 
     function setTimeByIndex(index, skipRender) {
-      const idx = clamp(Math.round(index), 0, TIME_SCALE.length - 1);
-      state.timeDiv = TIME_SCALE[idx];
+      const scale = scaleFromControl(controls.timeRange);
+      const idx = clamp(Math.round(index), 0, scale.length - 1);
+      state.timeDiv = scale[idx];
       controls.timeRange.value = idx;
       controls.timeLabel.textContent = formatTimeDivLabel(state.timeDiv);
-      if (!skipRender) renderCurrentFrame();
+      if (!skipRender) {
+        renderCurrentFrame();
+      }
     }
 
     function setVoltByIndex(index, skipRender) {
-      const idx = clamp(Math.round(index), 0, VOLT_SCALE.length - 1);
-      state.voltDiv = VOLT_SCALE[idx];
+      const scale = scaleFromControl(controls.voltRange);
+      const idx = clamp(Math.round(index), 0, scale.length - 1);
+      state.voltDiv = scale[idx];
       controls.voltRange.value = idx;
       controls.voltLabel.textContent = formatVoltDivLabel(state.voltDiv);
-      if (!skipRender) renderCurrentFrame();
+      if (!skipRender) {
+        renderCurrentFrame();
+      }
     }
 
-    function sliceForTimebase(samples, trigger) {
-      const windowSeconds = state.timeDiv * 1e-6 * H_DIVS;
-      let needed = Math.max(1, Math.floor(windowSeconds * state.sampleRate));
-      if (!Number.isFinite(needed) || needed <= 0) {
-        needed = samples.length;
+    function ensureBuffers(count, startIdx) {
+      while (ring.buffers.length < count) {
+        ring.buffers.push({
+          data: new Uint16Array(RING_CAPACITY),
+          head: 0,
+          size: 0,
+          startIdx: startIdx || 0,
+          endIdx: startIdx || 0,
+        });
       }
-      if (needed > samples.length) {
-        needed = samples.length;
-      }
-      let start = samples.length - needed;
-      if (start < 0) start = 0;
-      if (trigger && typeof trigger.index === 'number') {
-        const trigIdx = clamp(trigger.index, 0, samples.length - 1);
-        const half = Math.floor(needed / 2);
-        start = trigIdx - half;
-        if (start < 0) start = 0;
-        if (start + needed > samples.length) {
-          start = Math.max(0, samples.length - needed);
+    }
+
+    function appendSamples(msg) {
+      ensureBuffers(msg.samples.length, msg.first_idx);
+      msg.samples.forEach((channelSamples, ch) => {
+        const buf = ring.buffers[ch];
+        if (buf.size === 0) {
+          buf.startIdx = msg.first_idx;
+          buf.endIdx = msg.first_idx;
         }
+        for (let i = 0; i < channelSamples.length; i++) {
+          const value = channelSamples[i];
+          buf.data[buf.head] = value;
+          buf.head = (buf.head + 1) % ring.capacity;
+          if (buf.size < ring.capacity) {
+            buf.size++;
+          } else {
+            buf.startIdx++;
+          }
+          buf.endIdx = buf.startIdx + buf.size;
+        }
+      });
+    }
+
+    function ringSnapshot(buf, sampleCount) {
+      if (!buf || buf.size === 0) {
+        return { data: [], startIdx: buf ? buf.endIdx : 0 };
       }
-      const end = Math.min(samples.length, start + needed);
-      return { subset: samples.slice(start, end), startIndex: start };
+      let count = Math.min(sampleCount, buf.size);
+      const result = new Array(count);
+      let idx = (buf.head - count + ring.capacity) % ring.capacity;
+      for (let i = 0; i < count; i++) {
+        result[i] = buf.data[idx];
+        idx = (idx + 1) % ring.capacity;
+      }
+      const startIdx = buf.endIdx - count;
+      return { data: result, startIdx };
+    }
+
+    function downsample(data, maxPoints) {
+      if (data.length <= maxPoints) {
+        return data.slice();
+      }
+      const result = new Array(maxPoints);
+      const ratio = data.length / maxPoints;
+      for (let i = 0; i < maxPoints; i++) {
+        const idx = Math.floor(i * ratio);
+        result[i] = data[idx];
+      }
+      return result;
+    }
+
+    function drawAxes() {
+      ctx.fillStyle = '#020611';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 6]);
+      for (let i = 1; i < H_DIVS; i++) {
+        const x = (canvas.width / H_DIVS) * i;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let i = 1; i < V_DIVS; i++) {
+        const y = (canvas.height / V_DIVS) * i;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
     }
 
     function renderCurrentFrame() {
-      const ch = Number(controls.channel.value) || 0;
-      if (!lastFrame.samples || !lastFrame.samples[ch] || !lastFrame.samples[ch].length) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawAxes();
+      if (!ring.buffers.length) {
         return;
       }
-      const bits = lastFrame.bits || 8;
-      const samples = lastFrame.samples[ch];
-      const trig = lastFrame.trigger && lastFrame.trigger.channel === ch ? lastFrame.trigger : null;
-      const { subset, startIndex } = sliceForTimebase(samples, trig);
-      const maxCount = Math.pow(2, bits) - 1 || 255;
-      const countsToVolt = FULL_SCALE_V / maxCount;
+      const windowSeconds = state.timeDiv * 1e-6 * H_DIVS;
+      const neededSamples = Math.max(1, Math.floor(windowSeconds * state.sampleRate));
+      const maxCount = (1 << 8) - 1;
       let minV = state.voltOffset - (state.voltDiv * V_DIVS) / 2;
       let maxV = state.voltOffset + (state.voltDiv * V_DIVS) / 2;
       if (minV < 0) {
@@ -297,59 +374,40 @@ const indexHTML = `<!DOCTYPE html>
       }
       const spanV = Math.max(0.01, maxV - minV);
 
-      ctx.fillStyle = '#020611';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.strokeStyle = '#39e6ff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      for (let x = 0; x < canvas.width; x++) {
-        const idx = Math.min(subset.length - 1, Math.floor(x / canvas.width * subset.length));
-        const volt = subset[idx] * countsToVolt;
-        const norm = clamp((volt - minV) / spanV, 0, 1);
-        const y = canvas.height - norm * canvas.height;
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-
-      if (trig && typeof trig.level === 'number') {
-        const levelVolt = (trig.level / maxCount) * FULL_SCALE_V;
-        if (levelVolt >= minV && levelVolt <= maxV) {
-          const levelY = canvas.height - ((levelVolt - minV) / spanV) * canvas.height;
-          ctx.strokeStyle = 'rgba(255, 154, 34, 0.8)';
-          ctx.setLineDash([6, 6]);
-          ctx.beginPath();
-          ctx.moveTo(0, levelY);
-          ctx.lineTo(canvas.width, levelY);
-          ctx.stroke();
-          ctx.setLineDash([]);
+      ring.buffers.forEach((buf, ch) => {
+        const snapshot = ringSnapshot(buf, neededSamples);
+        if (!snapshot.data.length) {
+          return;
         }
-        if (typeof trig.index === 'number') {
-          const rel = trig.index - startIndex;
-          if (rel >= 0 && rel < subset.length) {
-            const x = rel / subset.length * canvas.width;
+        const ds = downsample(snapshot.data, MAX_DISPLAY_POINTS);
+        ctx.strokeStyle = CHANNEL_COLORS[ch % CHANNEL_COLORS.length];
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ds.forEach((value, idx) => {
+          const x = (idx / (ds.length - 1 || 1)) * canvas.width;
+          const volt = (value / maxCount) * FULL_SCALE_V;
+          const norm = clamp((volt - minV) / spanV, 0, 1);
+          const y = canvas.height - norm * canvas.height;
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        if (lastTriggerInfo && lastTriggerInfo.channel === ch && typeof lastTriggerAbsIdx === 'number') {
+          const rel = lastTriggerAbsIdx - snapshot.startIdx;
+          if (rel >= 0 && rel < snapshot.data.length) {
+            const frac = rel / (snapshot.data.length - 1 || 1);
+            const x = frac * canvas.width;
             ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+            ctx.setLineDash([4, 4]);
             ctx.beginPath();
             ctx.moveTo(x, 0);
             ctx.lineTo(x, canvas.height);
             ctx.stroke();
+            ctx.setLineDash([]);
           }
         }
-      }
-    }
-
-    function drawWave(samples, bits, trigger) {
-      if (!samples || !samples.length) {
-        lastFrame = { samples: null, bits, trigger };
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        return;
-      }
-      lastFrame = {
-        samples: samples.map((ch) => ch.slice()),
-        bits,
-        trigger: trigger || null,
-      };
-      renderCurrentFrame();
+      });
     }
 
     function sendTriggerConfig() {
@@ -373,11 +431,12 @@ const indexHTML = `<!DOCTYPE html>
     }
 
     function handleAutoset() {
-      const ch = Number(controls.channel.value) || 0;
-      if (!lastFrame.samples || !lastFrame.samples[ch] || !lastFrame.samples[ch].length) {
+      if (!lastMsg || !lastMsg.samples || !lastMsg.samples.length) {
         return;
       }
-      const samples = lastFrame.samples[ch];
+      const ch = Number(controls.channel.value) || 0;
+      const samples = lastMsg.samples[ch];
+      if (!samples || !samples.length) return;
       let min = samples[0];
       let max = samples[0];
       for (const v of samples) {
@@ -389,28 +448,24 @@ const indexHTML = `<!DOCTYPE html>
       controls.levelLabel.textContent = controls.level.value;
       controls.mode.value = 'auto';
       controls.slope.value = 'rising';
-
-      const bits = lastFrame.bits || 8;
-      const countsToVolt = FULL_SCALE_V / (Math.pow(2, bits) - 1 || 255);
+      const bits = lastMsg.sample_bits || 8;
+      const countsToVolt = FULL_SCALE_V / ((1 << bits) - 1 || 255);
       const p2pVolt = Math.max((max - min) * countsToVolt, 0.01);
       const targetSpanPerDiv = (p2pVolt * 1.3) / V_DIVS;
-      const voltIdx = findNearestIndex(VOLT_SCALE, targetSpanPerDiv);
-      setVoltByIndex(voltIdx, true);
-
+      const voltScale = scaleFromControl(controls.voltRange);
+      setVoltByIndex(findNearestIndex(voltScale, targetSpanPerDiv), true);
       const midVolt = clamp(mid * countsToVolt, 0, FULL_SCALE_V);
       controls.voltOffset.value = midVolt.toFixed(2);
       controls.voltOffsetLabel.textContent = midVolt.toFixed(2) + ' V';
       state.voltOffset = midVolt;
-
       const periodSamples = estimatePeriod(samples, mid);
       if (periodSamples) {
         const periodTime = periodSamples / state.sampleRate;
         const desiredWindow = Math.max(periodTime * 2, periodTime * 1.2);
         const desiredPerDiv = (desiredWindow / H_DIVS) * 1e6;
-        const timeIdx = findNearestIndex(TIME_SCALE, desiredPerDiv);
-        setTimeByIndex(timeIdx, true);
+        const timeScale = scaleFromControl(controls.timeRange);
+        setTimeByIndex(findNearestIndex(timeScale, desiredPerDiv), true);
       }
-
       renderCurrentFrame();
       sendTriggerConfig();
     }
@@ -419,11 +474,8 @@ const indexHTML = `<!DOCTYPE html>
       let first = -1;
       for (let i = 1; i < samples.length; i++) {
         if (samples[i - 1] < threshold && samples[i] >= threshold) {
-          if (first === -1) {
-            first = i;
-          } else {
-            return i - first;
-          }
+          if (first === -1) first = i;
+          else return i - first;
         }
       }
       return null;
@@ -431,10 +483,10 @@ const indexHTML = `<!DOCTYPE html>
 
     function attachControlEvents() {
       controls.timeRange.addEventListener('input', () => {
-        setTimeByIndex(Number(controls.timeRange.value), false);
+        setTimeByIndex(Number(controls.timeRange.value));
       });
       controls.voltRange.addEventListener('input', () => {
-        setVoltByIndex(Number(controls.voltRange.value), false);
+        setVoltByIndex(Number(controls.voltRange.value));
       });
       controls.voltOffset.addEventListener('input', () => {
         state.voltOffset = parseFloat(controls.voltOffset.value);
@@ -468,7 +520,6 @@ const indexHTML = `<!DOCTYPE html>
     function connect() {
       const url = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/ws';
       ws = new WebSocket(url);
-
       ws.onopen = () => {
         setStatus('WebSocket 연결됨 · 샘플 대기 중');
         if (reconnectTimer) {
@@ -477,17 +528,23 @@ const indexHTML = `<!DOCTYPE html>
         }
         sendTriggerConfig();
       };
-
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
           if (msg.samples && msg.samples.length) {
-            if (typeof msg.sample_rate === 'number' && isFinite(msg.sample_rate) && msg.sample_rate > 0) {
-              state.sampleRate = msg.sample_rate;
+            appendSamples(msg);
+            lastMsg = msg;
+            lastSeq = msg.seq;
+            lastSamplesPerCh = msg.samples_per_ch;
+            state.sampleRate = msg.sample_rate || DEFAULT_SAMPLE_RATE;
+            if (msg.trigger && typeof msg.trigger.index === 'number') {
+              lastTriggerInfo = msg.trigger;
+              lastTriggerAbsIdx = msg.first_idx + msg.trigger.index;
             } else {
-              state.sampleRate = DEFAULT_SAMPLE_RATE;
+              lastTriggerInfo = null;
+              lastTriggerAbsIdx = null;
             }
-            drawWave(msg.samples, msg.sample_bits || 8, msg.trigger);
+            renderCurrentFrame();
             const trigState = msg.trigger && msg.trigger.state ? msg.trigger.state : 'auto';
             const info = trigState + ' · ' + msg.samples_per_ch + ' samples';
             setStatus('seq ' + msg.seq + ' · ' + info);
@@ -498,13 +555,11 @@ const indexHTML = `<!DOCTYPE html>
           console.error('invalid ws message', err);
         }
       };
-
       ws.onclose = () => {
         setStatus('연결 끊김 · 재연결 시도 중…');
         setTriggerStatus('재연결 중');
         reconnectTimer = setTimeout(connect, 1500);
       };
-
       ws.onerror = () => {
         ws.close();
       };
