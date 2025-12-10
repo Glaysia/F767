@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"strings"
@@ -354,16 +355,31 @@ const indexHTML = `<!DOCTYPE html>
     }
 
     function downsample(data, maxPoints) {
+      if (!data.length) {
+        return { mins: [], maxs: [] };
+      }
       if (data.length <= maxPoints) {
-        return data.slice();
+        return { mins: data.slice(), maxs: data.slice() };
       }
-      const result = new Array(maxPoints);
-      const ratio = (data.length - 1) / (maxPoints - 1);
+      const mins = new Array(maxPoints);
+      const maxs = new Array(maxPoints);
+      const ratio = data.length / maxPoints;
       for (let i = 0; i < maxPoints; i++) {
-        const idx = Math.round(i * ratio);
-        result[i] = data[idx];
+        const start = Math.floor(i * ratio);
+        let end = Math.floor((i + 1) * ratio);
+        if (end <= start) end = start + 1;
+        if (end > data.length) end = data.length;
+        let minVal = data[start];
+        let maxVal = data[start];
+        for (let j = start + 1; j < end; j++) {
+          const val = data[j];
+          if (val < minVal) minVal = val;
+          if (val > maxVal) maxVal = val;
+        }
+        mins[i] = minVal;
+        maxs[i] = maxVal;
       }
-      return result;
+      return { mins, maxs };
     }
 
     function drawAxes() {
@@ -434,18 +450,24 @@ const indexHTML = `<!DOCTYPE html>
           return;
         }
         const ds = downsample(snapshot.data, MAX_DISPLAY_POINTS);
-        ctx.strokeStyle = CHANNEL_COLORS[ch % CHANNEL_COLORS.length];
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ds.forEach((value, idx) => {
-          const x = (idx / (ds.length - 1 || 1)) * canvas.width;
-          const volt = (value / maxCount) * FULL_SCALE_V;
-          const norm = clamp((volt - minV) / spanV, 0, 1);
-          const y = canvas.height - norm * canvas.height;
-          if (idx === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        });
-        ctx.stroke();
+        const points = ds.mins.length;
+        if (points) {
+          ctx.strokeStyle = CHANNEL_COLORS[ch % CHANNEL_COLORS.length];
+          ctx.lineWidth = 1.5;
+          for (let idx = 0; idx < points; idx++) {
+            const x = (idx / (points - 1 || 1)) * canvas.width;
+            const voltMin = (ds.mins[idx] / maxCount) * FULL_SCALE_V;
+            const voltMax = (ds.maxs[idx] / maxCount) * FULL_SCALE_V;
+            const normMin = clamp((voltMin - minV) / spanV, 0, 1);
+            const normMax = clamp((voltMax - minV) / spanV, 0, 1);
+            const yMin = canvas.height - normMin * canvas.height;
+            const yMax = canvas.height - normMax * canvas.height;
+            ctx.beginPath();
+            ctx.moveTo(x, yMax);
+            ctx.lineTo(x, yMin);
+            ctx.stroke();
+          }
+        }
 
         if (trigChannel === ch && typeof trigLevelCounts === 'number') {
           const trigVolt = (trigLevelCounts / maxCount) * FULL_SCALE_V;
@@ -637,11 +659,12 @@ const indexHTML = `<!DOCTYPE html>
 </html>`
 
 const (
-	protoHeaderSize   = 0x14
-	defaultPreview    = 8
-	approxSampleRate  = 2.4e6 // samples per second per channel
-	ringCapacityPerCh = 1_000_000
-	snapshotSamples   = 16384
+	protoHeaderSize  = 0x14
+	defaultPreview   = 8
+	approxSampleRate = 2.4e6 // samples per second per channel
+	snapshotSamples  = 16384
+	displayPoints    = 2048
+	eventSchemaVer   = 1
 )
 
 type packetHeader struct {
@@ -722,7 +745,21 @@ type packetEvent struct {
 	SampleBits     uint16      `json:"sample_bits"`
 	Flags          uint16      `json:"flags"`
 	Samples        [][]uint16  `json:"samples"`
+	SamplesMin     [][]uint16  `json:"samples_min,omitempty"`
+	SamplesMax     [][]uint16  `json:"samples_max,omitempty"`
+	HistorySeconds float64     `json:"history_seconds"`
+	BufferUtil     float64     `json:"buffer_utilization"`
+	DropCount      uint64      `json:"drop_count"`
+	IngestDelayUs  uint64      `json:"ingest_delay_us"`
+	TriggerAbsIdx  uint64      `json:"trigger_abs_idx"`
+	SchemaVersion  int         `json:"schema_version"`
 	Trigger        triggerInfo `json:"trigger"`
+}
+
+type captureJob struct {
+	header   packetHeader
+	samples  [][]uint16
+	received time.Time
 }
 
 type channelRing struct {
@@ -787,25 +824,31 @@ type sampleBuffer struct {
 	version          atomic.Uint64
 	sampleRate       float64
 	samplesPerPacket uint16
+	ringCapacity     int
+	historySeconds   float64
+	dropCount        uint64
+	ingestLagUs      uint64
 }
 
-func newSampleBuffer(channels int, capacity int) *sampleBuffer {
+func newSampleBuffer(channels int, capacity int, historySeconds float64) *sampleBuffer {
 	if channels <= 0 {
 		channels = 1
 	}
 	if capacity <= 0 {
-		capacity = ringCapacityPerCh
+		capacity = snapshotSamples
 	}
 	rings := make([]*channelRing, channels)
 	for i := range rings {
 		rings[i] = newChannelRing(capacity)
 	}
 	return &sampleBuffer{
-		rings:      rings,
-		startIdx:   0,
-		sampleBits: 8,
-		channels:   uint16(channels),
-		sampleRate: approxSampleRate,
+		rings:          rings,
+		startIdx:       0,
+		sampleBits:     8,
+		channels:       uint16(channels),
+		sampleRate:     approxSampleRate,
+		ringCapacity:   capacity,
+		historySeconds: historySeconds,
 	}
 }
 
@@ -813,8 +856,8 @@ func (sb *sampleBuffer) reset(startIdx uint64, channels int) {
 	if channels <= 0 {
 		channels = 1
 	}
-	capacity := ringCapacityPerCh
-	if len(sb.rings) > 0 && len(sb.rings[0].data) > 0 {
+	capacity := sb.ringCapacity
+	if capacity <= 0 && len(sb.rings) > 0 && len(sb.rings[0].data) > 0 {
 		capacity = len(sb.rings[0].data)
 	}
 	rings := make([]*channelRing, channels)
@@ -828,7 +871,7 @@ func (sb *sampleBuffer) reset(startIdx uint64, channels int) {
 	sb.version.Add(1)
 }
 
-func (sb *sampleBuffer) appendPacket(h packetHeader, samples [][]uint16, trig triggerInfo) error {
+func (sb *sampleBuffer) appendPacket(h packetHeader, samples [][]uint16, trig triggerInfo, ingestDelay time.Duration) error {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
@@ -846,6 +889,9 @@ func (sb *sampleBuffer) appendPacket(h packetHeader, samples [][]uint16, trig tr
 	}
 
 	if h.FirstSampleIdx != sb.expectedIdx {
+		if h.FirstSampleIdx > sb.expectedIdx {
+			sb.dropCount += h.FirstSampleIdx - sb.expectedIdx
+		}
 		sb.reset(h.FirstSampleIdx, len(samples))
 	}
 
@@ -863,6 +909,7 @@ func (sb *sampleBuffer) appendPacket(h packetHeader, samples [][]uint16, trig tr
 
 	if dropped > 0 {
 		sb.startIdx += uint64(dropped)
+		sb.dropCount += uint64(dropped)
 	}
 	sb.expectedIdx = h.FirstSampleIdx + uint64(len(samples[0]))
 	sb.sampleBits = h.SampleBits
@@ -876,6 +923,10 @@ func (sb *sampleBuffer) appendPacket(h packetHeader, samples [][]uint16, trig tr
 	if trig.Active && trig.Index >= 0 {
 		sb.lastTriggerAbs = h.FirstSampleIdx + uint64(trig.Index)
 	}
+	if ingestDelay < 0 {
+		ingestDelay = 0
+	}
+	sb.ingestLagUs = uint64(ingestDelay / time.Microsecond)
 	sb.version.Add(1)
 	return nil
 }
@@ -889,17 +940,27 @@ func (sb *sampleBuffer) snapshot(maxSamples int) (packetEvent, uint64, bool) {
 	}
 
 	evt := packetEvent{
-		Seq:          sb.lastSeq,
-		SampleRate:   sb.sampleRate,
-		Channels:     uint16(len(sb.rings)),
-		SampleBits:   sb.sampleBits,
-		Flags:        sb.lastFlags,
-		Samples:      make([][]uint16, len(sb.rings)),
-		Trigger:      sb.lastTrigger,
-		SamplesPerCh: 0,
+		Seq:            sb.lastSeq,
+		SampleRate:     sb.sampleRate,
+		Channels:       uint16(len(sb.rings)),
+		SampleBits:     sb.sampleBits,
+		Flags:          sb.lastFlags,
+		Samples:        make([][]uint16, len(sb.rings)),
+		SamplesMin:     make([][]uint16, len(sb.rings)),
+		SamplesMax:     make([][]uint16, len(sb.rings)),
+		Trigger:        sb.lastTrigger,
+		SamplesPerCh:   0,
+		HistorySeconds: sb.historySeconds,
+		DropCount:      sb.dropCount,
+		IngestDelayUs:  sb.ingestLagUs,
+		TriggerAbsIdx:  sb.lastTriggerAbs,
+		SchemaVersion:  eventSchemaVer,
 	}
 
 	firstIdx := sb.startIdx
+	if len(sb.rings) > 0 && len(sb.rings[0].data) > 0 {
+		evt.BufferUtil = float64(sb.rings[0].size) / float64(len(sb.rings[0].data))
+	}
 	for ch, r := range sb.rings {
 		chSamples := r.snapshot(maxSamples)
 		evt.Samples[ch] = chSamples
@@ -933,8 +994,8 @@ func (sb *sampleBuffer) snapshot(maxSamples int) (packetEvent, uint64, bool) {
 	} else {
 		evt.FirstSampleIdx = firstIdx
 	}
-	if sb.lastTriggerAbs >= evt.FirstSampleIdx {
-		rel := sb.lastTriggerAbs - evt.FirstSampleIdx
+	if evt.TriggerAbsIdx >= evt.FirstSampleIdx {
+		rel := evt.TriggerAbsIdx - evt.FirstSampleIdx
 		if rel < uint64(evt.SamplesPerCh) {
 			evt.Trigger.Index = int(rel)
 		} else {
@@ -944,7 +1005,55 @@ func (sb *sampleBuffer) snapshot(maxSamples int) (packetEvent, uint64, bool) {
 		evt.Trigger.Index = -1
 	}
 
+	for ch, data := range evt.Samples {
+		if len(data) == 0 {
+			continue
+		}
+		mins, maxs := minMaxDownsample(data, displayPoints)
+		evt.SamplesMin[ch] = mins
+		evt.SamplesMax[ch] = maxs
+	}
+
 	return evt, sb.version.Load(), true
+}
+
+func minMaxDownsample(samples []uint16, maxPoints int) ([]uint16, []uint16) {
+	if maxPoints <= 0 || len(samples) == 0 {
+		return nil, nil
+	}
+	if len(samples) <= maxPoints {
+		mins := append([]uint16(nil), samples...)
+		maxs := append([]uint16(nil), samples...)
+		return mins, maxs
+	}
+
+	mins := make([]uint16, maxPoints)
+	maxs := make([]uint16, maxPoints)
+	ratio := float64(len(samples)) / float64(maxPoints)
+	for i := 0; i < maxPoints; i++ {
+		start := int(math.Floor(float64(i) * ratio))
+		end := int(math.Floor(float64(i+1) * ratio))
+		if end <= start {
+			end = start + 1
+		}
+		if end > len(samples) {
+			end = len(samples)
+		}
+		minVal := samples[start]
+		maxVal := samples[start]
+		for j := start + 1; j < end; j++ {
+			v := samples[j]
+			if v < minVal {
+				minVal = v
+			}
+			if v > maxVal {
+				maxVal = v
+			}
+		}
+		mins[i] = minVal
+		maxs[i] = maxVal
+	}
+	return mins, maxs
 }
 
 func newTriggerController() *triggerController {
@@ -1137,7 +1246,7 @@ type wsHub struct {
 	snapshotSize  int
 }
 
-func newWSHub(fps int, trigger *triggerController) *wsHub {
+func newWSHub(fps int, trigger *triggerController, historySamples int, historySeconds float64) *wsHub {
 	if fps <= 0 {
 		fps = 30
 	}
@@ -1158,7 +1267,7 @@ func newWSHub(fps int, trigger *triggerController) *wsHub {
 		frameInterval: interval,
 		writeTimeout:  500 * time.Millisecond,
 		trigger:       trigger,
-		buffer:        newSampleBuffer(1, ringCapacityPerCh),
+		buffer:        newSampleBuffer(1, historySamples, historySeconds),
 		snapshotSize:  snapshotSamples,
 	}
 }
@@ -1175,11 +1284,11 @@ func (h *wsHub) dispatchLoop() {
 	}
 }
 
-func (h *wsHub) appendPacket(hdr packetHeader, samples [][]uint16, trig triggerInfo) {
+func (h *wsHub) appendPacket(hdr packetHeader, samples [][]uint16, trig triggerInfo, ingestDelay time.Duration) {
 	if h.buffer == nil {
 		return
 	}
-	if err := h.buffer.appendPacket(hdr, samples, trig); err != nil {
+	if err := h.buffer.appendPacket(hdr, samples, trig, ingestDelay); err != nil {
 		log.Printf("buffer append failed seq=%d: %v", hdr.PacketSeq, err)
 	}
 }
@@ -1189,15 +1298,32 @@ func main() {
 	udpListen := flag.String("udp", ":5000", "UDP listen address for ADC packets")
 	dumpPackets := flag.Bool("dump-packets", false, "log each UDP packet summary to stdout")
 	uiFPS := flag.Int("ui-fps", 60, "maximum WebSocket frame rate (frames per second)")
+	historySeconds := flag.Float64("history", 20, "capture history to keep per channel (seconds)")
+	ingestQueue := flag.Int("ingest-q", 64, "UDP ingest queue length before processing")
 	flag.Parse()
+
+	if *historySeconds <= 0 {
+		*historySeconds = 1
+	}
+
+	historySamples := int(*historySeconds * approxSampleRate)
+	if historySamples < snapshotSamples {
+		historySamples = snapshotSamples
+	}
+	if *ingestQueue < 1 {
+		*ingestQueue = 1
+	}
 
 	triggerCtl := newTriggerController()
 
-	hub := newWSHub(*uiFPS, triggerCtl)
+	hub := newWSHub(*uiFPS, triggerCtl, historySamples, *historySeconds)
 	hub.Start()
 
+	captureJobs := make(chan captureJob, *ingestQueue)
+	go captureLoop(captureJobs, hub, triggerCtl)
+
 	go func() {
-		if err := runUDPReceiver(*udpListen, *dumpPackets, hub, triggerCtl); err != nil {
+		if err := runUDPReceiver(*udpListen, *dumpPackets, captureJobs); err != nil {
 			log.Fatalf("udp receiver stopped: %v", err)
 		}
 	}()
@@ -1220,7 +1346,7 @@ func main() {
 	}
 }
 
-func runUDPReceiver(listenAddr string, dumpPackets bool, hub *wsHub, trigger *triggerController) error {
+func runUDPReceiver(listenAddr string, dumpPackets bool, jobs chan captureJob) error {
 	udpAddr, err := net.ResolveUDPAddr("udp", listenAddr)
 	if err != nil {
 		return fmt.Errorf("resolve udp addr: %w", err)
@@ -1231,6 +1357,7 @@ func runUDPReceiver(listenAddr string, dumpPackets bool, hub *wsHub, trigger *tr
 		return fmt.Errorf("listen udp: %w", err)
 	}
 	defer conn.Close()
+	defer close(jobs)
 
 	log.Printf("UDP receiver listening on %s", conn.LocalAddr())
 	buffer := make([]byte, 65536)
@@ -1261,6 +1388,28 @@ func runUDPReceiver(listenAddr string, dumpPackets bool, hub *wsHub, trigger *tr
 			log.Println(summarizeSamples(header, samples))
 		}
 
+		job := captureJob{
+			header:   header,
+			samples:  samples,
+			received: time.Now(),
+		}
+
+		select {
+		case jobs <- job:
+		default:
+			// Channel full; drop oldest job and insert the new one.
+			select {
+			case <-jobs:
+				log.Printf("capture queue full, dropping oldest job before seq=%d", header.PacketSeq)
+			default:
+			}
+			jobs <- job
+		}
+	}
+}
+
+func captureLoop(queue <-chan captureJob, hub *wsHub, trigger *triggerController) {
+	for job := range queue {
 		shouldSend := true
 		trigInfo := triggerInfo{
 			Mode:  string(triggerModeAuto),
@@ -1268,19 +1417,22 @@ func runUDPReceiver(listenAddr string, dumpPackets bool, hub *wsHub, trigger *tr
 			Index: -1,
 			State: "passthrough",
 		}
+
 		if trigger != nil {
 			var trigErr error
-			shouldSend, trigInfo, trigErr = trigger.Process(header, samples)
+			shouldSend, trigInfo, trigErr = trigger.Process(job.header, job.samples)
 			if trigErr != nil {
 				trigInfo.State = "error"
-				log.Printf("trigger processing error seq=%d: %v", header.PacketSeq, trigErr)
-			}
-			if !shouldSend {
-				continue
+				log.Printf("trigger processing error seq=%d: %v", job.header.PacketSeq, trigErr)
 			}
 		}
 
-		hub.appendPacket(header, samples, trigInfo)
+		if !shouldSend {
+			continue
+		}
+
+		delay := time.Since(job.received)
+		hub.appendPacket(job.header, job.samples, trigInfo, delay)
 	}
 }
 
