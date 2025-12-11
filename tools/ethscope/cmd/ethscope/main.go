@@ -43,6 +43,22 @@ const indexHTML = `<!DOCTYPE html>
     .hint.small { font-size: 12px; margin-top: 4px; opacity: 0.6; }
     .inline-value { font-size: 13px; opacity: 0.75; }
     .control.full { grid-column: span 2; }
+    .panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 18px; }
+    .panel { background: rgba(255,255,255,0.03); border: 1px solid rgba(73,123,177,0.35); border-radius: 14px; padding: 14px 16px; }
+    .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .panel-title { font-weight: 700; letter-spacing: 0.3px; }
+    .panel-sub { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+    .panel-actions { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .panel-actions label { font-weight: 600; }
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+    .metric { background: rgba(0,0,0,0.15); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 10px 12px; }
+    .metric label { display: block; font-size: 12px; opacity: 0.75; }
+    .metric .value { font-size: 18px; font-weight: 700; margin-top: 4px; color: #41dfff; letter-spacing: 0.2px; }
+    .cursor-section { display: flex; flex-direction: column; gap: 8px; }
+    .cursor-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+    .cursor-sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+    .cursor-sliders label { font-size: 12px; opacity: 0.85; display: flex; flex-direction: column; gap: 4px; }
+    .readout { font-family: "JetBrains Mono", "SFMono-Regular", monospace; font-size: 12px; opacity: 0.85; }
   </style>
 </head>
 <body>
@@ -107,6 +123,71 @@ const indexHTML = `<!DOCTYPE html>
         <button id="autoset">AUTOSET</button>
       </div>
     </div>
+    <div class="panel-grid">
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title">메져</div>
+            <div class="panel-sub">Vpp · Mean · RMS · Freq · T</div>
+          </div>
+          <div class="panel-actions">
+            <label for="measure-channel">채널</label>
+            <select id="measure-channel">
+              <option value="0">CH1</option>
+              <option value="1">CH2</option>
+            </select>
+          </div>
+        </div>
+        <div class="metric-grid">
+          <div class="metric">
+            <label>Vpp</label>
+            <div class="value" id="measure-vpp">-</div>
+          </div>
+          <div class="metric">
+            <label>Mean</label>
+            <div class="value" id="measure-mean">-</div>
+          </div>
+          <div class="metric">
+            <label>RMS</label>
+            <div class="value" id="measure-rms">-</div>
+          </div>
+          <div class="metric">
+            <label>Freq</label>
+            <div class="value" id="measure-freq">-</div>
+          </div>
+          <div class="metric">
+            <label>T (주기)</label>
+            <div class="value" id="measure-period">-</div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title">커서</div>
+            <div class="panel-sub">시간/전압 커서 Δt, ΔV 표시</div>
+          </div>
+        </div>
+        <div class="cursor-section">
+          <div class="cursor-row">
+            <label><input type="checkbox" id="cursor-time-enable" checked> 시간 커서</label>
+            <div class="readout" id="cursor-time-readout">T1=- · T2=- · Δt=-</div>
+          </div>
+          <div class="cursor-sliders">
+            <label>T1 위치 (%)<input type="range" id="cursor-t1" min="0" max="100" step="1" value="30"></label>
+            <label>T2 위치 (%)<input type="range" id="cursor-t2" min="0" max="100" step="1" value="70"></label>
+          </div>
+          <div class="cursor-row">
+            <label><input type="checkbox" id="cursor-volt-enable"> 전압 커서</label>
+            <div class="readout" id="cursor-volt-readout">V1=- · V2=- · ΔV=-</div>
+          </div>
+          <div class="cursor-sliders">
+            <label>V1 (V)<input type="range" id="cursor-v1" min="-7.25" max="7.25" step="0.05" value="1.0"></label>
+            <label>V2 (V)<input type="range" id="cursor-v2" min="-7.25" max="7.25" step="0.05" value="-1.0"></label>
+          </div>
+        </div>
+      </div>
+    </div>
     <canvas id="scope" width="960" height="360"></canvas>
     <p class="hint">상태 표시줄에 현재 time/div, volt/div, 트리거 상태가 표시됩니다. 모바일에서도 동일 UI가 동작합니다.</p>
   </div>
@@ -145,6 +226,24 @@ const indexHTML = `<!DOCTYPE html>
       armBtn: document.getElementById('trigger-arm'),
       autoset: document.getElementById('autoset'),
     };
+    const measureUI = {
+      channel: document.getElementById('measure-channel'),
+      vpp: document.getElementById('measure-vpp'),
+      mean: document.getElementById('measure-mean'),
+      rms: document.getElementById('measure-rms'),
+      freq: document.getElementById('measure-freq'),
+      period: document.getElementById('measure-period'),
+    };
+    const cursorUI = {
+      timeEnable: document.getElementById('cursor-time-enable'),
+      voltEnable: document.getElementById('cursor-volt-enable'),
+      t1: document.getElementById('cursor-t1'),
+      t2: document.getElementById('cursor-t2'),
+      v1: document.getElementById('cursor-v1'),
+      v2: document.getElementById('cursor-v2'),
+      timeReadout: document.getElementById('cursor-time-readout'),
+      voltReadout: document.getElementById('cursor-volt-readout'),
+    };
     const state = {
       timeDiv: 2,
       voltDiv: 0.5,
@@ -152,6 +251,25 @@ const indexHTML = `<!DOCTYPE html>
       sampleRate: DEFAULT_SAMPLE_RATE,
       sampleBits: 8,
       triggerLevelVolt: parseFloat(document.getElementById('trigger-level').value),
+    };
+    const cursorState = {
+      timeEnabled: true,
+      voltEnabled: false,
+      t1: parseInt(cursorUI.t1.value, 10) / 100,
+      t2: parseInt(cursorUI.t2.value, 10) / 100,
+      v1: parseFloat(cursorUI.v1.value),
+      v2: parseFloat(cursorUI.v2.value),
+    };
+    if (!isFinite(cursorState.t1)) cursorState.t1 = 0.3;
+    if (!isFinite(cursorState.t2)) cursorState.t2 = 0.7;
+    if (!isFinite(cursorState.v1)) cursorState.v1 = 1;
+    if (!isFinite(cursorState.v2)) cursorState.v2 = -1;
+    let currentView = {
+      windowSeconds: 0,
+      sampleRate: state.sampleRate,
+      channels: [],
+      minV: 0,
+      maxV: 0,
     };
     const ring = {
       buffers: [],
@@ -265,6 +383,38 @@ const indexHTML = `<!DOCTYPE html>
       }
       const precision = abs >= 100 ? 0 : abs >= 10 ? 1 : 2;
       return microseconds.toFixed(precision) + ' µs';
+    }
+
+    function formatVoltValue(value) {
+      if (!isFinite(value)) return '-';
+      const abs = Math.abs(value);
+      if (abs >= 1) return value.toFixed(2) + ' V';
+      return (value * 1000).toFixed(1) + ' mV';
+    }
+
+    function formatFreqHz(freq) {
+      if (!isFinite(freq) || freq <= 0) return '-';
+      if (freq >= 1e6) return (freq / 1e6).toFixed(freq >= 10e6 ? 1 : 2) + ' MHz';
+      if (freq >= 1e3) return (freq / 1e3).toFixed(freq >= 100e3 ? 1 : 2) + ' kHz';
+      return freq.toFixed(freq >= 100 ? 0 : 2) + ' Hz';
+    }
+
+    function formatSeconds(sec) {
+      if (!isFinite(sec) || sec <= 0) return '-';
+      return formatTimeTick(sec * 1e6);
+    }
+
+    function formatDeltaTime(sec) {
+      if (!isFinite(sec)) return '-';
+      const sign = sec >= 0 ? '' : '-';
+      return sign + formatTimeTick(Math.abs(sec) * 1e6);
+    }
+
+    function formatDeltaVolt(volt) {
+      if (!isFinite(volt)) return '-';
+      const abs = Math.abs(volt);
+      if (abs >= 1) return volt.toFixed(2) + ' V';
+      return (volt * 1000).toFixed(1) + ' mV';
     }
 
     function setStatus(text) {
@@ -493,9 +643,6 @@ const indexHTML = `<!DOCTYPE html>
 
     function renderCurrentFrame() {
       drawAxes();
-      if (!ring.buffers.length) {
-        return;
-      }
       const bits = Math.max(1, state.sampleBits || 8);
       const maxCount = (1 << bits) - 1;
       const countsToVolt = FULL_SCALE_SPAN_V / maxCount;
@@ -507,24 +654,38 @@ const indexHTML = `<!DOCTYPE html>
       const trigChannel = lastTriggerInfo ? lastTriggerInfo.channel : null;
       const trigLevelCounts = lastTriggerInfo ? lastTriggerInfo.level : null;
 
+      currentView = {
+        windowSeconds,
+        sampleRate: state.sampleRate,
+        channels: [],
+        minV,
+        maxV,
+      };
       let windowStartIdx = null;
 
-        ring.buffers.forEach((buf, ch) => {
-          if (buf.size === 0) {
-            return;
-          }
+      ring.buffers.forEach((buf, ch) => {
+        if (buf.size === 0) {
+          return;
+        }
 
-          if (windowStartIdx === null) {
-            const latestStart = buf.endIdx - neededSamples;
-            const triggerIdx = typeof lastTriggerAbsIdx === 'number' ? lastTriggerAbsIdx : null;
-            if (triggerIdx !== null) {
-              windowStartIdx = triggerIdx - Math.floor(neededSamples / 2);
-            } else {
-              windowStartIdx = latestStart;
-            }
+        if (windowStartIdx === null) {
+          const latestStart = buf.endIdx - neededSamples;
+          const triggerIdx = typeof lastTriggerAbsIdx === 'number' ? lastTriggerAbsIdx : null;
+          if (triggerIdx !== null) {
+            windowStartIdx = triggerIdx - Math.floor(neededSamples / 2);
+          } else {
+            windowStartIdx = latestStart;
           }
+        }
 
-          const snapshot = ringRange(buf, windowStartIdx, neededSamples);
+        const snapshot = ringRange(buf, windowStartIdx, neededSamples);
+        if (snapshot.data.length) {
+          currentView.channels[ch] = {
+            samples: snapshot.data,
+            startIdx: snapshot.startIdx,
+            sampleRate: state.sampleRate,
+          };
+        }
         if (!snapshot.data.length) {
           return;
         }
@@ -597,8 +758,11 @@ const indexHTML = `<!DOCTYPE html>
         }
       });
 
+      drawCursors(minV, maxV, windowSeconds);
       drawGridLabels(minV, maxV);
       drawScaleLabels();
+      updateMeasurements();
+      updateCursorReadouts(windowSeconds);
     }
 
     function drawGridLabels(minV, maxV) {
@@ -640,6 +804,146 @@ const indexHTML = `<!DOCTYPE html>
       ctx.restore();
     }
 
+    function drawCursors(minV, maxV, windowSeconds) {
+      const spanV = Math.max(0.001, maxV - minV);
+      ctx.save();
+      if (cursorState.timeEnabled) {
+        const tColor = 'rgba(255,255,255,0.65)';
+        const positions = [
+          { frac: clamp(cursorState.t1, 0, 1), label: 'T1' },
+          { frac: clamp(cursorState.t2, 0, 1), label: 'T2' },
+        ];
+        ctx.strokeStyle = tColor;
+        ctx.setLineDash([4, 4]);
+        positions.forEach((pos) => {
+          const x = pos.frac * canvas.width;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, canvas.height);
+          ctx.stroke();
+          ctx.fillStyle = tColor;
+          ctx.font = '12px "Segoe UI", "Pretendard", sans-serif';
+          ctx.textBaseline = 'top';
+          ctx.fillText(pos.label, clamp(x + 4, 0, canvas.width - 20), 6);
+        });
+        ctx.setLineDash([]);
+      }
+
+      if (cursorState.voltEnabled) {
+        const vColor = '#41dfff';
+        const vPositions = [
+          { value: cursorState.v1, label: 'V1' },
+          { value: cursorState.v2, label: 'V2' },
+        ];
+        ctx.strokeStyle = vColor;
+        ctx.setLineDash([6, 4]);
+        vPositions.forEach((p) => {
+          const clampedV = clamp(p.value, minV, maxV);
+          const norm = clamp((clampedV - minV) / spanV, 0, 1);
+          const y = canvas.height - norm * canvas.height;
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(canvas.width, y);
+          ctx.stroke();
+          ctx.fillStyle = vColor;
+          ctx.font = '12px "Segoe UI", "Pretendard", sans-serif';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText(p.label, 6, clamp(y - 4, 12, canvas.height - 4));
+        });
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
+    }
+
+    function estimateFrequency(samples, threshold, sampleRate) {
+      if (!samples || samples.length < 2 || !sampleRate) return null;
+      const edges = [];
+      for (let i = 1; i < samples.length; i++) {
+        if (samples[i - 1] < threshold && samples[i] >= threshold) {
+          edges.push(i);
+          if (edges.length >= 8) break;
+        }
+      }
+      if (edges.length < 2) return null;
+      let total = 0;
+      for (let i = 1; i < edges.length; i++) {
+        total += edges[i] - edges[i - 1];
+      }
+      const avg = total / (edges.length - 1);
+      if (!isFinite(avg) || avg <= 0) return null;
+      return sampleRate / avg;
+    }
+
+    function updateMeasurements() {
+      const ch = Number(measureUI.channel.value) || 0;
+      const view = currentView.channels[ch];
+      if (!view || !view.samples || !view.samples.length) {
+        measureUI.vpp.textContent = '-';
+        measureUI.mean.textContent = '-';
+        measureUI.rms.textContent = '-';
+        measureUI.freq.textContent = '-';
+        measureUI.period.textContent = '-';
+        return;
+      }
+      const bits = Math.max(1, state.sampleBits || 8);
+      const maxCount = (1 << bits) - 1;
+      const countsToVolt = FULL_SCALE_SPAN_V / maxCount;
+      let minC = view.samples[0];
+      let maxC = view.samples[0];
+      let sumVolt = 0;
+      let sumSqVolt = 0;
+      for (const c of view.samples) {
+        if (c < minC) minC = c;
+        if (c > maxC) maxC = c;
+        const v = FULL_SCALE_MIN_V + c * countsToVolt;
+        sumVolt += v;
+        sumSqVolt += v * v;
+      }
+      const meanVolt = sumVolt / view.samples.length;
+      const rmsVolt = Math.sqrt(sumSqVolt / view.samples.length);
+      const vpp = (maxC - minC) * countsToVolt;
+      const level = (minC + maxC) / 2;
+      const freq = estimateFrequency(view.samples, level, view.sampleRate || currentView.sampleRate);
+      const period = freq ? 1 / freq : null;
+
+      measureUI.vpp.textContent = formatVoltValue(vpp);
+      measureUI.mean.textContent = formatVoltValue(meanVolt);
+      measureUI.rms.textContent = formatVoltValue(rmsVolt);
+      measureUI.freq.textContent = formatFreqHz(freq);
+      measureUI.period.textContent = formatSeconds(period);
+    }
+
+    function updateCursorReadouts(windowSeconds) {
+      const spanSec = windowSeconds || currentView.windowSeconds;
+      const t1 = clamp(cursorState.t1, 0, 1);
+      const t2 = clamp(cursorState.t2, 0, 1);
+      if (cursorState.timeEnabled && spanSec > 0) {
+        const t1Sec = (t1 - 0.5) * spanSec;
+        const t2Sec = (t2 - 0.5) * spanSec;
+        const deltaSec = (t2 - t1) * spanSec;
+        const freq = deltaSec !== 0 ? Math.abs(1 / deltaSec) : null;
+        cursorUI.timeReadout.textContent =
+          'T1=' + formatDeltaTime(t1Sec) +
+          ' · T2=' + formatDeltaTime(t2Sec) +
+          ' · Δt=' + formatDeltaTime(deltaSec) +
+          (freq ? ' · 1/Δt=' + formatFreqHz(freq) : '');
+      } else if (cursorState.timeEnabled) {
+        cursorUI.timeReadout.textContent = '시간 커서 대기 (화면 없음)';
+      } else {
+        cursorUI.timeReadout.textContent = '시간 커서 OFF';
+      }
+
+      if (cursorState.voltEnabled) {
+        const deltaV = cursorState.v2 - cursorState.v1;
+        cursorUI.voltReadout.textContent =
+          'V1=' + formatVoltValue(cursorState.v1) +
+          ' · V2=' + formatVoltValue(cursorState.v2) +
+          ' · ΔV=' + formatDeltaVolt(deltaV);
+      } else {
+        cursorUI.voltReadout.textContent = '전압 커서 OFF';
+      }
+    }
+
     function sendTriggerConfig() {
       state.triggerLevelVolt = parseFloat(controls.level.value);
       const bits = Math.max(1, state.sampleBits || 8);
@@ -676,14 +980,14 @@ const indexHTML = `<!DOCTYPE html>
         if (v < min) min = v;
         if (v > max) max = v;
       }
+      const bits = lastMsg.sample_bits || 8;
+      const countsToVolt = FULL_SCALE_SPAN_V / ((1 << bits) - 1 || 255);
       const mid = (min + max) / 2;
       const midVolt = clamp(FULL_SCALE_MIN_V + mid * countsToVolt, FULL_SCALE_MIN_V, FULL_SCALE_MAX_V);
       controls.level.value = midVolt.toFixed(2);
       controls.levelLabel.textContent = formatVolt(midVolt);
       controls.mode.value = 'auto';
       controls.slope.value = 'rising';
-      const bits = lastMsg.sample_bits || 8;
-      const countsToVolt = FULL_SCALE_SPAN_V / ((1 << bits) - 1 || 255);
       const p2pVolt = Math.max((max - min) * countsToVolt, 0.01);
       const targetSpanPerDiv = (p2pVolt * 1.3) / V_DIVS;
       setVoltByIndex(findNearestIndex(VOLT_SCALE, targetSpanPerDiv), true);
@@ -750,6 +1054,33 @@ const indexHTML = `<!DOCTYPE html>
       controls.autoset.addEventListener('click', (e) => {
         e.preventDefault();
         handleAutoset();
+      });
+      measureUI.channel.addEventListener('change', () => {
+        updateMeasurements();
+      });
+      cursorUI.timeEnable.addEventListener('change', () => {
+        cursorState.timeEnabled = cursorUI.timeEnable.checked;
+        renderCurrentFrame();
+      });
+      cursorUI.voltEnable.addEventListener('change', () => {
+        cursorState.voltEnabled = cursorUI.voltEnable.checked;
+        renderCurrentFrame();
+      });
+      cursorUI.t1.addEventListener('input', () => {
+        cursorState.t1 = parseInt(cursorUI.t1.value, 10) / 100;
+        renderCurrentFrame();
+      });
+      cursorUI.t2.addEventListener('input', () => {
+        cursorState.t2 = parseInt(cursorUI.t2.value, 10) / 100;
+        renderCurrentFrame();
+      });
+      cursorUI.v1.addEventListener('input', () => {
+        cursorState.v1 = parseFloat(cursorUI.v1.value);
+        renderCurrentFrame();
+      });
+      cursorUI.v2.addEventListener('input', () => {
+        cursorState.v2 = parseFloat(cursorUI.v2.value);
+        renderCurrentFrame();
       });
     }
 
