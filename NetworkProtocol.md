@@ -64,3 +64,8 @@ Offset  Size  Field             Description
 ### 대역폭
 - 1채널 8비트 2.4 MSa/s → 약 19.2 Mbit/s.
 - 2채널 확장 시 ≈38.4 Mbit/s로 100 Mbit/s 이더넷 한도 내 여유가 있다.
+
+## Function Generator Relay
+- **Transport:** UDP ASCII control.
+- **Destination:** MCU1 `192.168.10.2:6001` (default, overridable via `--fg-addr` on the host UI).
+- **Payload:** UART.md 명령 문자열을 그대로 보냄 (`F1000`, `A2048`, `W0`, `D`, `H` 등). MCU1이 UART4(115200/8/N/1, TX=PC10, RX=PC11)로 전달한다.

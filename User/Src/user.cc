@@ -6,6 +6,7 @@
 #include "adc.hh"
 #include "user.hh"
 #include "main.h"
+#include "fg_relay.h"
 
 
 #include "stm32f7xx_hal_def.h"
@@ -14,6 +15,7 @@
 extern "C" {
 
 extern UART_HandleTypeDef huart3;
+extern UART_HandleTypeDef huart4;
 
 
 int __io_putchar(int ch)
@@ -32,11 +34,13 @@ void UserCppInit(uint16_t *adc_dma_buffer, size_t adc_dma_samples)
     AdcHandler::Init(adc_dma_buffer, adc_dma_samples);
     AdcHandler::StartDma();
     EthStream::Instance().Reset();
+    FgRelay_Init();
 }
 
 void UserCppProcess(void)
 {
     AdcHandler::Process();
+    FgRelay_Process();
 }
 
 } /* extern "C" */

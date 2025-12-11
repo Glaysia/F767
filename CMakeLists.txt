@@ -50,6 +50,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     User/Src/adc.cc
     User/Src/eth.cc
+    User/Src/fg_relay.c
     User/Src/user.cc
 )
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/main.c PROPERTIES LANGUAGE CXX)

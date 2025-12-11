@@ -32,6 +32,11 @@ const indexHTML = `<!DOCTYPE html>
     p { margin: 4px 0 14px; line-height: 1.5; opacity: 0.85; }
     canvas { width: 100%; max-height: 420px; border-radius: 16px; background: #030a14; border: 1px solid rgba(255,255,255,0.04); margin-top: 18px; box-shadow: 0 10px 40px rgba(0,0,0,0.35); }
     .status { display: flex; flex-wrap: wrap; gap: 16px; padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px dashed rgba(90,140,200,0.6); font-size: 14px; }
+    .tab-buttons { display: flex; gap: 10px; margin-bottom: 14px; }
+    .tab-btn { border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.06); color: #e5f0ff; padding: 10px 14px; cursor: pointer; font-weight: 700; letter-spacing: 0.3px; transition: background 0.15s ease, border-color 0.15s ease; }
+    .tab-btn.active { background: linear-gradient(120deg, rgba(65,223,255,0.3), rgba(255,255,255,0.08)); border-color: rgba(65,223,255,0.6); }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
     .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 18px; }
     .control { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
     label { font-weight: 600; letter-spacing: 0.2px; }
@@ -59,145 +64,217 @@ const indexHTML = `<!DOCTYPE html>
     .cursor-sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
     .cursor-sliders label { font-size: 12px; opacity: 0.85; display: flex; flex-direction: column; gap: 4px; }
     .readout { font-family: "JetBrains Mono", "SFMono-Regular", monospace; font-size: 12px; opacity: 0.85; }
+    .fg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 12px; }
+    .fg-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(73,123,177,0.35); border-radius: 14px; padding: 14px 16px; }
+    .fg-raw { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.25); color: #e5f0ff; font-size: 14px; }
+    .fg-status { margin-top: 12px; padding: 12px 14px; border-radius: 12px; border: 1px dashed rgba(90,140,200,0.6); background: rgba(255,255,255,0.03); font-size: 13px; }
+    .button-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .raw-row { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>F767 이더넷 오실로스코프</h1>
-    <p>WebSocket으로 수신한 샘플을 캔버스에 그리고, 시간축/전압축/트리거 파라미터를 즉시 조정합니다. Autoset 버튼은 최근 파형을 분석해 적절한 배율과 트리거를 추천합니다.</p>
-    <div class="status">
-      <div>서버 상태: <strong id="status">WebSocket 연결 대기</strong></div>
-      <div id="trigger-status">트리거: -</div>
+    <div class="tab-buttons">
+      <button class="tab-btn active" data-tab="scope">오실로스코프</button>
+      <button class="tab-btn" data-tab="fg">함수 발생기</button>
     </div>
-    <div class="controls">
-      <div class="control">
-        <label for="time-range">시간축 <span class="inline-value" id="time-div-label">2 µs/div</span></label>
-        <input type="range" id="time-range" min="0" max="0" step="1">
-        <div class="hint small">0.1 µs/div부터 100 ms/div까지 연속 1-2-5 스텝</div>
+
+    <div id="tab-scope" class="tab-pane active">
+      <h1>F767 이더넷 오실로스코프</h1>
+      <p>WebSocket으로 수신한 샘플을 캔버스에 그리고, 시간축/전압축/트리거 파라미터를 즉시 조정합니다. Autoset 버튼은 최근 파형을 분석해 적절한 배율과 트리거를 추천합니다.</p>
+      <div class="status">
+        <div>서버 상태: <strong id="status">WebSocket 연결 대기</strong></div>
+        <div id="trigger-status">트리거: -</div>
       </div>
-      <div class="control">
-        <label for="volt-range">전압축 <span class="inline-value" id="volt-div-label">0.5 V/div</span></label>
-        <input type="range" id="volt-range" min="0" max="0" step="1">
-        <div class="hint small">10 mV/div ~ 10 V/div</div>
+      <div class="controls">
+        <div class="control">
+          <label for="time-range">시간축 <span class="inline-value" id="time-div-label">2 µs/div</span></label>
+          <input type="range" id="time-range" min="0" max="0" step="1">
+          <div class="hint small">0.1 µs/div부터 100 ms/div까지 연속 1-2-5 스텝</div>
+        </div>
+        <div class="control">
+          <label for="volt-range">전압축 <span class="inline-value" id="volt-div-label">0.5 V/div</span></label>
+          <input type="range" id="volt-range" min="0" max="0" step="1">
+          <div class="hint small">10 mV/div ~ 10 V/div</div>
+        </div>
+        <div class="control">
+          <label for="volt-offset">전압 오프셋 (V) <span class="inline-value" id="volt-offset-value">0.00 V</span></label>
+          <input type="range" id="volt-offset" min="-9" max="9" step="0.05" value="0" />
+        </div>
+        <div class="control">
+          <label for="trigger-mode">트리거 모드</label>
+          <select id="trigger-mode">
+            <option value="auto">Auto</option>
+            <option value="normal">Normal</option>
+            <option value="single">Single</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="trigger-slope">슬로프</label>
+          <select id="trigger-slope">
+            <option value="rising">Rising</option>
+            <option value="falling">Falling</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="trigger-channel">채널</label>
+          <select id="trigger-channel">
+            <option value="0">CH1</option>
+            <option value="1">CH2</option>
+          </select>
+        </div>
+        <div class="control">
+          <label for="trigger-level">트리거 레벨 (V) <span class="inline-value" id="trigger-level-value">0.00 V</span></label>
+          <input type="range" id="trigger-level" min="-9" max="9" step="0.05" value="0" />
+        </div>
+        <div class="control">
+          <label for="trigger-holdoff">홀드오프 (µs) <span class="inline-value" id="trigger-holdoff-value">5</span></label>
+          <input type="range" id="trigger-holdoff" min="0" max="100" step="1" value="5" />
+        </div>
+        <div class="control">
+          <label>Single 모드</label>
+          <button id="trigger-arm">ARM / FORCE</button>
+        </div>
+        <div class="control full">
+          <label>Auto Set</label>
+          <button id="autoset">AUTOSET</button>
+        </div>
       </div>
-      <div class="control">
-        <label for="volt-offset">전압 오프셋 (V) <span class="inline-value" id="volt-offset-value">0.00 V</span></label>
-        <input type="range" id="volt-offset" min="-7.25" max="7.25" step="0.05" value="0" />
-      </div>
-      <div class="control">
-        <label for="trigger-mode">트리거 모드</label>
-        <select id="trigger-mode">
-          <option value="auto">Auto</option>
-          <option value="normal">Normal</option>
-          <option value="single">Single</option>
-        </select>
-      </div>
-      <div class="control">
-        <label for="trigger-slope">슬로프</label>
-        <select id="trigger-slope">
-          <option value="rising">Rising</option>
-          <option value="falling">Falling</option>
-        </select>
-      </div>
-      <div class="control">
-        <label for="trigger-channel">채널</label>
-        <select id="trigger-channel">
-          <option value="0">CH1</option>
-          <option value="1">CH2</option>
-        </select>
-      </div>
-      <div class="control">
-        <label for="trigger-level">트리거 레벨 (V) <span class="inline-value" id="trigger-level-value">0.00 V</span></label>
-        <input type="range" id="trigger-level" min="-7.25" max="7.25" step="0.05" value="0" />
-      </div>
-      <div class="control">
-        <label for="trigger-holdoff">홀드오프 (µs) <span class="inline-value" id="trigger-holdoff-value">5</span></label>
-        <input type="range" id="trigger-holdoff" min="0" max="100" step="1" value="5" />
-      </div>
-      <div class="control">
-        <label>Single 모드</label>
-        <button id="trigger-arm">ARM / FORCE</button>
-      </div>
-      <div class="control full">
-        <label>Auto Set</label>
-        <button id="autoset">AUTOSET</button>
-      </div>
-    </div>
-    <div class="panel-grid">
-      <div class="panel">
-        <div class="panel-header">
-          <div>
-            <div class="panel-title">메져</div>
-            <div class="panel-sub">Vpp · Mean · RMS · Freq · T</div>
+      <div class="panel-grid">
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">메져</div>
+              <div class="panel-sub">Vpp · Mean · RMS · Freq · T</div>
+            </div>
+            <div class="panel-actions">
+              <label for="measure-channel">채널</label>
+              <select id="measure-channel">
+                <option value="0">CH1</option>
+                <option value="1">CH2</option>
+              </select>
+            </div>
           </div>
-          <div class="panel-actions">
-            <label for="measure-channel">채널</label>
-            <select id="measure-channel">
-              <option value="0">CH1</option>
-              <option value="1">CH2</option>
+          <div class="metric-grid">
+            <div class="metric">
+              <label>Vpp</label>
+              <div class="value" id="measure-vpp">-</div>
+            </div>
+            <div class="metric">
+              <label>Mean</label>
+              <div class="value" id="measure-mean">-</div>
+            </div>
+            <div class="metric">
+              <label>RMS</label>
+              <div class="value" id="measure-rms">-</div>
+            </div>
+            <div class="metric">
+              <label>Freq</label>
+              <div class="value" id="measure-freq">-</div>
+            </div>
+            <div class="metric">
+              <label>T (주기)</label>
+              <div class="value" id="measure-period">-</div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">커서</div>
+              <div class="panel-sub">시간/전압 커서 Δt, ΔV 표시</div>
+            </div>
+          </div>
+          <div class="cursor-section">
+            <div class="cursor-row">
+              <label><input type="checkbox" id="cursor-time-enable" checked> 시간 커서</label>
+              <div class="readout" id="cursor-time-readout">T1=- · T2=- · Δt=-</div>
+            </div>
+            <div class="cursor-sliders">
+              <label>T1 위치 (%)<input type="range" id="cursor-t1" min="0" max="100" step="1" value="30"></label>
+              <label>T2 위치 (%)<input type="range" id="cursor-t2" min="0" max="100" step="1" value="70"></label>
+            </div>
+            <div class="cursor-row">
+              <label><input type="checkbox" id="cursor-volt-enable"> 전압 커서</label>
+              <div class="readout" id="cursor-volt-readout">V1=- · V2=- · ΔV=-</div>
+            </div>
+            <div class="cursor-sliders">
+              <label>V1 (V)<input type="range" id="cursor-v1" min="-9" max="9" step="0.05" value="1.0"></label>
+              <label>V2 (V)<input type="range" id="cursor-v2" min="-9" max="9" step="0.05" value="-1.0"></label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <canvas id="scope" width="960" height="360"></canvas>
+      <p class="hint">상태 표시줄에 현재 time/div, volt/div, 트리거 상태가 표시됩니다. 모바일에서도 동일 UI가 동작합니다.</p>
+    </div>
+
+    <div id="tab-fg" class="tab-pane">
+      <h1>함수 발생기 컨트롤</h1>
+      <p>PC→MCU1(이더넷)→UART4→MCU2(FG) 릴레이 경로를 사용합니다. UART 115200/8/N/1, 명령은 UART.md 표준을 그대로 보냅니다.</p>
+      <div class="fg-grid">
+        <div class="fg-card">
+          <div class="control">
+            <label for="fg-waveform">파형 선택</label>
+            <select id="fg-waveform">
+              <option value="0">SINE (0)</option>
+              <option value="1">SQUARE (1)</option>
+              <option value="2">TRIANGLE (2)</option>
+              <option value="3">SAWTOOTH (3)</option>
             </select>
+            <div class="button-row">
+              <button type="button" data-fg-wave="0">SINE</button>
+              <button type="button" data-fg-wave="1">SQUARE</button>
+              <button type="button" data-fg-wave="2">TRIANGLE</button>
+              <button type="button" data-fg-wave="3">SAWTOOTH</button>
+            </div>
           </div>
         </div>
-        <div class="metric-grid">
-          <div class="metric">
-            <label>Vpp</label>
-            <div class="value" id="measure-vpp">-</div>
-          </div>
-          <div class="metric">
-            <label>Mean</label>
-            <div class="value" id="measure-mean">-</div>
-          </div>
-          <div class="metric">
-            <label>RMS</label>
-            <div class="value" id="measure-rms">-</div>
-          </div>
-          <div class="metric">
-            <label>Freq</label>
-            <div class="value" id="measure-freq">-</div>
-          </div>
-          <div class="metric">
-            <label>T (주기)</label>
-            <div class="value" id="measure-period">-</div>
+        <div class="fg-card">
+          <div class="control">
+            <label for="fg-freq">주파수 (Hz) <span class="inline-value" id="fg-freq-value">1000</span></label>
+            <input type="range" id="fg-freq" min="100" max="100000" step="50" value="1000">
+            <div class="hint small">100~100000 Hz (정수)</div>
+            <div class="button-row">
+              <button type="button" id="fg-apply-freq">주파수 적용</button>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="panel">
-        <div class="panel-header">
-          <div>
-            <div class="panel-title">커서</div>
-            <div class="panel-sub">시간/전압 커서 Δt, ΔV 표시</div>
+        <div class="fg-card">
+          <div class="control">
+            <label for="fg-amp">진폭 (DAC 코드) <span class="inline-value" id="fg-amp-value">4095</span></label>
+            <input type="range" id="fg-amp" min="0" max="4095" step="1" value="4095">
+            <div class="hint small">0~4095 (full-scale=4095)</div>
+            <div class="button-row">
+              <button type="button" id="fg-apply-amp">진폭 적용</button>
+            </div>
           </div>
         </div>
-        <div class="cursor-section">
-          <div class="cursor-row">
-            <label><input type="checkbox" id="cursor-time-enable" checked> 시간 커서</label>
-            <div class="readout" id="cursor-time-readout">T1=- · T2=- · Δt=-</div>
-          </div>
-          <div class="cursor-sliders">
-            <label>T1 위치 (%)<input type="range" id="cursor-t1" min="0" max="100" step="1" value="30"></label>
-            <label>T2 위치 (%)<input type="range" id="cursor-t2" min="0" max="100" step="1" value="70"></label>
-          </div>
-          <div class="cursor-row">
-            <label><input type="checkbox" id="cursor-volt-enable"> 전압 커서</label>
-            <div class="readout" id="cursor-volt-readout">V1=- · V2=- · ΔV=-</div>
-          </div>
-          <div class="cursor-sliders">
-            <label>V1 (V)<input type="range" id="cursor-v1" min="-7.25" max="7.25" step="0.05" value="1.0"></label>
-            <label>V2 (V)<input type="range" id="cursor-v2" min="-7.25" max="7.25" step="0.05" value="-1.0"></label>
+        <div class="fg-card">
+          <div class="control">
+            <label for="fg-raw">직접 명령 (예: F1000, A2048, D, H)</label>
+            <div class="raw-row">
+              <input id="fg-raw" class="fg-raw" type="text" placeholder="W0 / F1000 / A4095 / D / H">
+              <button type="button" id="fg-send-raw">전송</button>
+            </div>
+            <div class="button-row">
+              <button type="button" id="fg-display">D (현재 설정)</button>
+              <button type="button" id="fg-help">H (Help)</button>
+            </div>
           </div>
         </div>
       </div>
+      <div class="fg-status" id="fg-status">대기: WebSocket 연결 후 명령을 보낼 수 있습니다.</div>
+      <p class="hint small">UART4 TX=PC10, RX=PC11 (115200/8/N/1). 명령은 자동으로 LF로 끝납니다.</p>
     </div>
-    <canvas id="scope" width="960" height="360"></canvas>
-    <p class="hint">상태 표시줄에 현재 time/div, volt/div, 트리거 상태가 표시됩니다. 모바일에서도 동일 UI가 동작합니다.</p>
   </div>
   <script>
   (function() {
     const DEFAULT_SAMPLE_RATE = 1.263157e6; // match TIM5 (timer=72 MHz, ARR=56 -> 72e6/(56+1))
     const H_DIVS = 10;
     const V_DIVS = 8;
-    const FULL_SCALE_MIN_V = -7.25;
-    const FULL_SCALE_MAX_V = 7.25;
+    const FULL_SCALE_MIN_V = -9;
+    const FULL_SCALE_MAX_V = 9;
     const FULL_SCALE_SPAN_V = FULL_SCALE_MAX_V - FULL_SCALE_MIN_V;
     const RING_CAPACITY = 500000;
     const MAX_DISPLAY_POINTS = 2048;
@@ -244,6 +321,26 @@ const indexHTML = `<!DOCTYPE html>
       timeReadout: document.getElementById('cursor-time-readout'),
       voltReadout: document.getElementById('cursor-volt-readout'),
     };
+    const tabButtons = Array.from(document.querySelectorAll('.tab-btn'));
+    const tabPanes = {
+      scope: document.getElementById('tab-scope'),
+      fg: document.getElementById('tab-fg'),
+    };
+    const fgUI = {
+      waveform: document.getElementById('fg-waveform'),
+      freq: document.getElementById('fg-freq'),
+      freqValue: document.getElementById('fg-freq-value'),
+      amp: document.getElementById('fg-amp'),
+      ampValue: document.getElementById('fg-amp-value'),
+      raw: document.getElementById('fg-raw'),
+      sendRaw: document.getElementById('fg-send-raw'),
+      applyFreq: document.getElementById('fg-apply-freq'),
+      applyAmp: document.getElementById('fg-apply-amp'),
+      displayBtn: document.getElementById('fg-display'),
+      helpBtn: document.getElementById('fg-help'),
+      status: document.getElementById('fg-status'),
+      quickWaveButtons: document.querySelectorAll('[data-fg-wave]'),
+    };
     const state = {
       timeDiv: 2,
       voltDiv: 0.5,
@@ -287,6 +384,8 @@ const indexHTML = `<!DOCTYPE html>
 
     initializeRangeControls();
     attachControlEvents();
+    attachTabEvents();
+    attachFgEvents();
     connect();
 
     function initializeRangeControls() {
@@ -298,6 +397,112 @@ const indexHTML = `<!DOCTYPE html>
       controls.voltRange.max = VOLT_SCALE.length - 1;
       setVoltByIndex(findNearestIndex(VOLT_SCALE, state.voltDiv), true);
       controls.levelLabel.textContent = formatVolt(state.triggerLevelVolt);
+    }
+
+    function attachTabEvents() {
+      tabButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const target = btn.dataset.tab || 'scope';
+          switchTab(target);
+        });
+      });
+    }
+
+    function switchTab(target) {
+      Object.keys(tabPanes).forEach((key) => {
+        const active = key === target;
+        if (tabPanes[key]) {
+          tabPanes[key].classList.toggle('active', active);
+        }
+      });
+      tabButtons.forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.tab === target);
+      });
+    }
+
+    function setFgStatus(text, isError) {
+      if (!fgUI.status) return;
+      fgUI.status.textContent = text;
+      fgUI.status.style.color = isError ? '#ffb3b3' : '#e5f0ff';
+    }
+
+    function sendFgCommand(line, label) {
+      const trimmed = (line || '').trim();
+      if (!trimmed) {
+        setFgStatus('명령이 비었습니다.', true);
+        return;
+      }
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        setFgStatus('WebSocket 미연결: ' + trimmed, true);
+        return;
+      }
+      ws.send(JSON.stringify({ cmd: 'fg_send', line: trimmed }));
+      setFgStatus((label || '보냄') + ': ' + trimmed);
+    }
+
+    function updateFgLabels() {
+      if (fgUI.freq && fgUI.freqValue) {
+        const hz = Math.round(parseFloat(fgUI.freq.value) || 0);
+        fgUI.freqValue.textContent = hz;
+      }
+      if (fgUI.amp && fgUI.ampValue) {
+        const amp = Math.round(parseFloat(fgUI.amp.value) || 0);
+        fgUI.ampValue.textContent = amp;
+      }
+    }
+
+    function attachFgEvents() {
+      if (fgUI.waveform) {
+        fgUI.waveform.addEventListener('change', () => {
+          sendFgCommand('W' + fgUI.waveform.value, '파형');
+        });
+      }
+      fgUI.quickWaveButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const code = btn.dataset.fgWave;
+          sendFgCommand(code, '파형');
+        });
+      });
+      if (fgUI.freq) {
+        fgUI.freq.addEventListener('input', updateFgLabels);
+      }
+      if (fgUI.applyFreq) {
+        fgUI.applyFreq.addEventListener('click', () => {
+          const hz = clamp(Math.round(parseFloat(fgUI.freq.value) || 0), 100, 100000);
+          fgUI.freq.value = hz;
+          updateFgLabels();
+          sendFgCommand('F' + hz, '주파수');
+        });
+      }
+      if (fgUI.amp) {
+        fgUI.amp.addEventListener('input', updateFgLabels);
+      }
+      if (fgUI.applyAmp) {
+        fgUI.applyAmp.addEventListener('click', () => {
+          const amp = clamp(Math.round(parseFloat(fgUI.amp.value) || 0), 0, 4095);
+          fgUI.amp.value = amp;
+          updateFgLabels();
+          sendFgCommand('A' + amp, '진폭');
+        });
+      }
+      if (fgUI.sendRaw && fgUI.raw) {
+        fgUI.sendRaw.addEventListener('click', () => {
+          sendFgCommand(fgUI.raw.value, '직접');
+        });
+        fgUI.raw.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            sendFgCommand(fgUI.raw.value, '직접');
+          }
+        });
+      }
+      if (fgUI.displayBtn) {
+        fgUI.displayBtn.addEventListener('click', () => sendFgCommand('D', '상태 요청'));
+      }
+      if (fgUI.helpBtn) {
+        fgUI.helpBtn.addEventListener('click', () => sendFgCommand('H', 'Help'));
+      }
+      updateFgLabels();
     }
 
     function clamp(value, min, max) {
@@ -1089,6 +1294,7 @@ const indexHTML = `<!DOCTYPE html>
       ws = new WebSocket(url);
       ws.onopen = () => {
         setStatus('WebSocket 연결됨 · 샘플 대기 중');
+        setFgStatus('연결됨: FG 명령 전송 가능');
         if (reconnectTimer) {
           clearTimeout(reconnectTimer);
           reconnectTimer = null;
@@ -1151,6 +1357,7 @@ const indexHTML = `<!DOCTYPE html>
       ws.onclose = () => {
         setStatus('연결 끊김 · 재연결 시도 중…');
         setTriggerStatus('재연결 중');
+        setFgStatus('연결 끊김 · 명령 대기', true);
         reconnectTimer = setTimeout(connect, 1500);
       };
       ws.onerror = () => {
@@ -1240,6 +1447,7 @@ type wsCommand struct {
 	HoldoffUs float64 `json:"holdoff_us,omitempty"`
 	Channel   int     `json:"channel,omitempty"`
 	Samples   int     `json:"samples,omitempty"`
+	Line      string  `json:"line,omitempty"`
 }
 
 type packetEvent struct {
@@ -1787,6 +1995,49 @@ func (tc *triggerController) Process(h packetHeader, samples [][]uint16) (bool, 
 	return shouldSend, infos, nil
 }
 
+type fgRelay struct {
+	mu   sync.Mutex
+	conn *net.UDPConn
+	addr *net.UDPAddr
+}
+
+func newFGRelay(dest string) (*fgRelay, error) {
+	if strings.TrimSpace(dest) == "" {
+		return nil, nil
+	}
+	addr, err := net.ResolveUDPAddr("udp", dest)
+	if err != nil {
+		return nil, fmt.Errorf("resolve fg addr: %w", err)
+	}
+	conn, err := net.DialUDP("udp", nil, addr)
+	if err != nil {
+		return nil, fmt.Errorf("dial fg addr: %w", err)
+	}
+	return &fgRelay{
+		conn: conn,
+		addr: addr,
+	}, nil
+}
+
+func (f *fgRelay) Send(line string) error {
+	if f == nil || f.conn == nil || f.addr == nil {
+		return errors.New("fg relay not configured")
+	}
+	text := strings.TrimSpace(line)
+	if text == "" {
+		return errors.New("empty fg command")
+	}
+	// Function generator expects newline-terminated ASCII commands.
+	payload := []byte(text)
+	if !strings.HasSuffix(text, "\n") && !strings.HasSuffix(text, "\r") {
+		payload = append(payload, '\n')
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, err := f.conn.Write(payload)
+	return err
+}
+
 type wsHub struct {
 	mu            sync.Mutex
 	clients       map[*websocket.Conn]struct{}
@@ -1798,9 +2049,10 @@ type wsHub struct {
 	buffer        *sampleBuffer
 	snapshotSize  int
 	sampleRate    float64
+	fg            *fgRelay
 }
 
-func newWSHub(fps int, trigger *triggerController, historySamples int, historySeconds float64, sampleRate float64) *wsHub {
+func newWSHub(fps int, trigger *triggerController, historySamples int, historySeconds float64, sampleRate float64, fg *fgRelay) *wsHub {
 	if fps <= 0 {
 		fps = 30
 	}
@@ -1824,6 +2076,7 @@ func newWSHub(fps int, trigger *triggerController, historySamples int, historySe
 		buffer:        newSampleBuffer(1, historySamples, historySeconds, sampleRate),
 		snapshotSize:  snapshotSamples,
 		sampleRate:    sampleRate,
+		fg:            fg,
 	}
 }
 
@@ -1874,6 +2127,7 @@ func main() {
 	historySeconds := flag.Float64("history", 20, "capture history to keep per channel (seconds)")
 	ingestQueue := flag.Int("ingest-q", 64, "UDP ingest queue length before processing")
 	sampleRateFlag := flag.Float64("sample-rate", approxSampleRate, "per-channel ADC sample rate (samples per second)")
+	fgAddr := flag.String("fg-addr", "192.168.10.2:6001", "UDP destination for function generator relay (MCU1 control port)")
 	flag.Parse()
 
 	if *historySeconds <= 0 {
@@ -1899,7 +2153,12 @@ func main() {
 	triggerCtl := newTriggerController()
 	triggerCtl.SetSampleRate(sampleRate)
 
-	hub := newWSHub(*uiFPS, triggerCtl, historySamples, *historySeconds, sampleRate)
+	fgRelay, err := newFGRelay(*fgAddr)
+	if err != nil {
+		log.Fatalf("fg relay init failed: %v", err)
+	}
+
+	hub := newWSHub(*uiFPS, triggerCtl, historySamples, *historySeconds, sampleRate, fgRelay)
 	hub.Start()
 
 	captureJobs := make(chan captureJob, *ingestQueue)
@@ -1923,7 +2182,12 @@ func main() {
 		addr = "localhost" + addr
 	}
 
-	log.Printf("Serving UI at http://%s (UDP listener on %s, dump_packets=%v)\n", addr, *udpListen, *dumpPackets)
+	fgStatus := "disabled"
+	if fgRelay != nil && fgRelay.addr != nil {
+		fgStatus = fgRelay.addr.String()
+	}
+
+	log.Printf("Serving UI at http://%s (UDP listener on %s, dump_packets=%v, fg_relay=%s)\n", addr, *udpListen, *dumpPackets, fgStatus)
 	if err := http.ListenAndServe(*listen, mux); err != nil {
 		log.Fatalf("http server failed: %v", err)
 	}
@@ -2226,10 +2490,6 @@ func (h *wsHub) broadcastLatest() {
 }
 
 func (h *wsHub) handleCommand(data []byte) {
-	if h.trigger == nil {
-		return
-	}
-
 	var cmd wsCommand
 	if err := json.Unmarshal(data, &cmd); err != nil {
 		log.Printf("ws command decode error: %v", err)
@@ -2238,6 +2498,9 @@ func (h *wsHub) handleCommand(data []byte) {
 
 	switch cmd.Cmd {
 	case "set_trigger":
+		if h.trigger == nil {
+			return
+		}
 		update := triggerUpdate{
 			Mode:      cmd.Mode,
 			Slope:     cmd.Slope,
@@ -2247,9 +2510,19 @@ func (h *wsHub) handleCommand(data []byte) {
 		}
 		h.trigger.Update(update)
 	case "arm_single":
-		h.trigger.ArmSingle()
+		if h.trigger != nil {
+			h.trigger.ArmSingle()
+		}
 	case "set_view":
 		h.updateSnapshotSize(cmd.Samples)
+	case "fg_send":
+		if h.fg == nil {
+			log.Printf("fg relay not configured; dropping fg_send")
+			return
+		}
+		if err := h.fg.Send(cmd.Line); err != nil {
+			log.Printf("fg relay send failed: %v", err)
+		}
 	default:
 		log.Printf("ws unknown command: %s", cmd.Cmd)
 	}
