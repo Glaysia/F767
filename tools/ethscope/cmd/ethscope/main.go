@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -1532,8 +1531,7 @@ func parsePacket(data []byte) (packetHeader, []byte, error) {
 	}
 
 	origBytes := int(h.SamplesPerCh) * int(h.Channels) * sampleBytes
-	parityBytes := int(h.Channels)
-	expected := (origBytes * 2) + parityBytes
+	expected := origBytes
 	if len(payload) != expected {
 		return packetHeader{}, nil, fmt.Errorf("payload mismatch: have %d, expected %d", len(payload), expected)
 	}
@@ -1553,25 +1551,10 @@ func decodePacketSamples(h packetHeader, payload []byte) ([][]uint16, error) {
 	}
 
 	origBytes := totalSamples * sampleBytes
-	dupStart := origBytes
-	dupEnd := dupStart + origBytes
-	parityStart := dupEnd
-	parityEnd := parityStart + int(h.Channels)
-	if parityEnd > len(payload) {
-		return nil, fmt.Errorf("payload too small: have %d need %d", len(payload), parityEnd)
+	if origBytes != len(payload) {
+		return nil, fmt.Errorf("payload size mismatch: have %d need %d", len(payload), origBytes)
 	}
-
 	orig := payload[:origBytes]
-	dup := payload[dupStart:dupEnd]
-	parity := payload[parityStart:parityEnd]
-
-	if !bytes.Equal(orig, dup) {
-		return nil, errors.New("duplicate block mismatch")
-	}
-
-	if err := verifyParity8(orig, parity, int(h.Channels)); err != nil {
-		return nil, fmt.Errorf("parity %w", err)
-	}
 
 	out := make([][]uint16, h.Channels)
 	for ch := range out {
@@ -1598,27 +1581,6 @@ func summarizeSamples(h packetHeader, samples [][]uint16) string {
 	}
 
 	return sb.String()
-}
-
-func verifyParity8(samples []byte, parity []byte, channels int) error {
-	if channels <= 0 {
-		return errors.New("channels must be positive")
-	}
-	if len(parity) != channels {
-		return fmt.Errorf("parity length %d != channels %d", len(parity), channels)
-	}
-
-	sum := make([]byte, channels)
-	for i, b := range samples {
-		sum[i%channels] ^= b
-	}
-
-	for ch := 0; ch < channels; ch++ {
-		if sum[ch] != parity[ch] {
-			return fmt.Errorf("ch%d expected 0x%02X got 0x%02X", ch, sum[ch], parity[ch])
-		}
-	}
-	return nil
 }
 
 func previewUint16(samples []uint16, limit int) []uint16 {

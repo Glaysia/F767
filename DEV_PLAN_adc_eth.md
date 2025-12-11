@@ -53,3 +53,11 @@
 ## Optional later
 - Aggregate two frames per packet to reduce overhead if bandwidth headroom allows.
 - Add runtime-configurable remote IP/port via UART command.
+
+## No-drop / slow-host mode proposal
+- Goal: preserve continuity (no gaps) even if send/PC side hiccups; tolerate latency growth.
+- Buffering: use an 8-bit ring (pack samples to bytes) sized for 50–100 ms of backlog. Two channels × 2.4 MSa/s × 0.1 s × 1 byte ≈ 480 kB; place in AXI SRAM, 32-bit aligned for DMA. If SRAM is tight, start with ~50 ms (~240 kB) and tune.
+- Producer: DMA half/full callbacks only copy into the ring and advance `producer_idx` and `first_sample_index`; never drop in ISR. When the ring would overrun, set a “degrade” flag instead of overwriting.
+- Consumer: run `AdcHandler::Process()` in the main loop (right after `MX_LWIP_Process()`), not from a slow timer, and drain until the ring is empty, sending UDP immediately.
+- Degrade path: while backlog > high-water mark, decimate/average N:1 before packetizing (encode decimation factor in `flags`) to cut wire bandwidth without losing temporal coverage; exit degrade mode once backlog < low-water.
+- Telemetry: expose ring fill %, decimation factor, and drop counter over UART/log; drop counter should stay zero in normal operation.

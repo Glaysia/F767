@@ -1,7 +1,5 @@
 #include "adc.hh"
 
-#include <string.h>
-
 #include "eth.hh"
 
 extern "C" {
@@ -15,19 +13,21 @@ void Error_Handler(void);
 enum
 {
     kAdcFrameSamples = kEthStreamFrameCapacity * kEthStreamChannels,
-    kAdcFrameQueueDepth = 8
+    kAdcFrameQueueDepth = 512
 };
 
 struct AdcFrame
 {
-    uint16_t samples[kAdcFrameSamples];
+    uint8_t samples[kAdcFrameSamples];
     size_t sample_count;
+    uint64_t first_sample_idx;
     uint16_t flags;
 };
 
 static uint16_t *g_adc_dma_buffer = NULL;
 static size_t g_adc_dma_samples = 0U;
 static size_t g_half_samples = 0U;
+static uint64_t g_next_sample_idx = 0U;
 
 static AdcFrame g_frame_queue[kAdcFrameQueueDepth];
 static volatile size_t g_frame_read = 0U;
@@ -56,6 +56,7 @@ void AdcHandler::Init(uint16_t *dma_buffer, size_t dma_samples)
     g_frame_read = 0U;
     g_frame_write = 0U;
     g_drop_latch = 0U;
+    g_next_sample_idx = 0U;
 }
 
 void AdcHandler::StartDma(void)
@@ -80,7 +81,7 @@ void AdcHandler::Process(void)
     while (g_frame_read != g_frame_write)
     {
         AdcFrame &frame = g_frame_queue[g_frame_read];
-        const bool sent = EthStream::Instance().SendFrame(frame.samples, frame.sample_count, frame.flags);
+        const bool sent = EthStream::Instance().SendFrame(frame.samples, frame.sample_count, frame.flags, frame.first_sample_idx);
         if (!sent)
         {
             g_drop_latch = 1U;
@@ -107,21 +108,30 @@ static void AdcHandler_HandleDmaBlock(size_t base_index)
 
 static void AdcHandler_Enqueue(const uint16_t *src, size_t samples)
 {
-    size_t next_write = (g_frame_write + 1U) % kAdcFrameQueueDepth;
-    if (next_write == g_frame_read)
-    {
-        g_drop_latch = 1U;
-        return;
-    }
-
     if (samples > kAdcFrameSamples)
     {
         samples = kAdcFrameSamples;
     }
 
-    memcpy(g_frame_queue[g_frame_write].samples, src, samples * sizeof(uint16_t));
-    g_frame_queue[g_frame_write].sample_count = samples;
-    g_frame_queue[g_frame_write].flags = g_drop_latch;
+    const size_t samples_per_ch = (kEthStreamChannels == 0U) ? 0U : (samples / kEthStreamChannels);
+    const uint64_t first_idx = g_next_sample_idx;
+    g_next_sample_idx += (uint64_t)samples_per_ch;
+
+    size_t next_write = (g_frame_write + 1U) % kAdcFrameQueueDepth;
+    if ((next_write == g_frame_read) || (samples_per_ch == 0U))
+    {
+        g_drop_latch = 1U;
+        return;
+    }
+
+    AdcFrame &frame = g_frame_queue[g_frame_write];
+    for (size_t i = 0; i < samples; ++i)
+    {
+        frame.samples[i] = (uint8_t)(src[i] & 0xFFU);
+    }
+    frame.sample_count = samples;
+    frame.first_sample_idx = first_idx;
+    frame.flags = g_drop_latch;
     g_drop_latch = 0U;
 
     g_frame_write = next_write;

@@ -10,12 +10,10 @@
 
 #include "stm32f7xx_hal_def.h"
 #include "stm32f7xx_hal_gpio.h"
-#include "stm32f7xx_hal_tim.h"
 
 extern "C" {
 
 extern UART_HandleTypeDef huart3;
-extern TIM_HandleTypeDef htim3;
 
 
 int __io_putchar(int ch)
@@ -34,19 +32,11 @@ void UserCppInit(uint16_t *adc_dma_buffer, size_t adc_dma_samples)
     AdcHandler::Init(adc_dma_buffer, adc_dma_samples);
     AdcHandler::StartDma();
     EthStream::Instance().Reset();
-    
-    HAL_TIM_Base_Start_IT(&htim3);
 }
 
 void UserCppProcess(void)
 {
     AdcHandler::Process();
-}
-
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
-    if(htim == &htim3){ // 4.5kHz Timer
-        UserCppProcess();
-    }
 }
 
 } /* extern "C" */

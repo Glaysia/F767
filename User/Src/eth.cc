@@ -51,7 +51,7 @@ void EthStream::Reset(void)
     }
 }
 
-bool EthStream::SendFrame(const uint16_t *samples, size_t sample_count, uint16_t flags)
+bool EthStream::SendFrame(const uint8_t *samples, size_t sample_count, uint16_t flags, uint64_t first_sample_idx)
 {
     if ((samples == NULL) || (sample_count == 0U) || (udp == NULL))
     {
@@ -63,17 +63,17 @@ bool EthStream::SendFrame(const uint16_t *samples, size_t sample_count, uint16_t
         return false;
     }
 
-    const size_t sample_bytes = (kEthStreamSampleBits + 7U) / 8U;
-    if (sample_bytes != sizeof(uint8_t))
+    if (sample_count > 0xFFFFU)
     {
         return false;
     }
     const uint16_t samples_per_ch = (uint16_t)(sample_count / kEthStreamChannels);
-    const size_t original_payload_bytes = sample_count * sample_bytes;
-    const size_t duplicate_bytes = original_payload_bytes;
-    const size_t parity_bytes = kEthStreamChannels;
-    const size_t payload_bytes = original_payload_bytes + duplicate_bytes + parity_bytes;
+    const size_t payload_bytes = sample_count;
     const size_t total_bytes = sizeof(EthPacketHeader) + payload_bytes;
+    if (total_bytes > 0xFFFFU)
+    {
+        return false;
+    }
 
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)total_bytes, PBUF_RAM);
     if (p == NULL)
@@ -89,36 +89,16 @@ bool EthStream::SendFrame(const uint16_t *samples, size_t sample_count, uint16_t
 
     EthPacketHeader *hdr = static_cast<EthPacketHeader *>(p->payload);
     hdr->packet_seq = packet_sequence++;
-    hdr->first_sample_idx = first_sample_index;
+    hdr->first_sample_idx = first_sample_idx;
     hdr->channels = kEthStreamChannels;
     hdr->samples_per_ch = samples_per_ch;
     hdr->flags = flags;
     hdr->sample_bits = kEthStreamSampleBits;
 
-    first_sample_index += (uint64_t)samples_per_ch;
+    first_sample_index = first_sample_idx + (uint64_t)samples_per_ch;
 
     uint8_t *payload = reinterpret_cast<uint8_t *>(p->payload) + sizeof(EthPacketHeader);
-    uint8_t *original_base = payload;
-    uint8_t parity[kEthStreamChannels];
-    memset(parity, 0, sizeof(parity));
-
-    for (size_t i = 0; i < sample_count; ++i)
-    {
-        const uint8_t sample_val = (uint8_t)(samples[i] & 0xFFU);
-        original_base[i] = sample_val;
-
-        const size_t channel = i % kEthStreamChannels;
-        parity[channel] ^= sample_val;
-    }
-
-    uint8_t *duplicate_base = original_base + original_payload_bytes;
-    memcpy(duplicate_base, original_base, original_payload_bytes);
-
-    uint8_t *parity_base = duplicate_base + duplicate_bytes;
-    for (size_t ch = 0; ch < kEthStreamChannels; ++ch)
-    {
-        parity_base[ch] = parity[ch];
-    }
+    memcpy(payload, samples, payload_bytes);
 
     const err_t err = udp_send(udp, p);
     pbuf_free(p);

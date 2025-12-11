@@ -33,7 +33,7 @@ struct EthStream
     struct udp_pcb *udp;
 
     void Reset(void);
-    bool SendFrame(const uint16_t *samples, size_t sample_count, uint16_t flags);
+    bool SendFrame(const uint8_t *samples, size_t sample_count, uint16_t flags, uint64_t first_sample_idx);
     static EthStream &Instance(void);
 
 private:
