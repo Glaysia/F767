@@ -91,8 +91,8 @@ const indexHTML = `<!DOCTYPE html>
         </select>
       </div>
       <div class="control">
-        <label for="trigger-level">트리거 레벨 <span class="inline-value" id="trigger-level-value">128</span></label>
-        <input type="range" id="trigger-level" min="0" max="255" value="128" />
+        <label for="trigger-level">트리거 레벨 (V) <span class="inline-value" id="trigger-level-value">0.00 V</span></label>
+        <input type="range" id="trigger-level" min="-7.25" max="7.25" step="0.05" value="0" />
       </div>
       <div class="control">
         <label for="trigger-holdoff">홀드오프 (µs) <span class="inline-value" id="trigger-holdoff-value">5</span></label>
@@ -151,6 +151,7 @@ const indexHTML = `<!DOCTYPE html>
       voltOffset: parseFloat(controls.voltOffset.value),
       sampleRate: DEFAULT_SAMPLE_RATE,
       sampleBits: 8,
+      triggerLevelVolt: parseFloat(document.getElementById('trigger-level').value),
     };
     const ring = {
       buffers: [],
@@ -161,6 +162,10 @@ const indexHTML = `<!DOCTYPE html>
     let lastTriggerAbsIdx = null;
     let reconnectTimer = null;
     let ws = null;
+
+    function clearTriggerAnchor() {
+      lastTriggerAbsIdx = null;
+    }
 
     initializeRangeControls();
     attachControlEvents();
@@ -174,6 +179,7 @@ const indexHTML = `<!DOCTYPE html>
       controls.voltRange.min = 0;
       controls.voltRange.max = VOLT_SCALE.length - 1;
       setVoltByIndex(findNearestIndex(VOLT_SCALE, state.voltDiv), true);
+      controls.levelLabel.textContent = formatVolt(state.triggerLevelVolt);
     }
 
     function clamp(value, min, max) {
@@ -242,6 +248,10 @@ const indexHTML = `<!DOCTYPE html>
       return (value * 1000).toFixed(0) + ' mV';
     }
 
+    function formatVolt(value) {
+      return value.toFixed(2) + ' V';
+    }
+
     function formatTimeTick(microseconds) {
       const abs = Math.abs(microseconds);
       if (abs >= 1e6) {
@@ -263,6 +273,20 @@ const indexHTML = `<!DOCTYPE html>
 
     function setTriggerStatus(text) {
       triggerStatusEl.textContent = '트리거: ' + text;
+    }
+
+    function voltsToCounts(volts, bits) {
+      const maxCount = Math.max(1, (1 << bits) - 1);
+      const countsToVolt = FULL_SCALE_SPAN_V / maxCount;
+      const clampedVolt = clamp(volts, FULL_SCALE_MIN_V, FULL_SCALE_MAX_V);
+      const counts = Math.round((clampedVolt - FULL_SCALE_MIN_V) / countsToVolt);
+      return clamp(counts, 0, maxCount);
+    }
+
+    function countsToVolts(counts, bits) {
+      const maxCount = Math.max(1, (1 << bits) - 1);
+      const countsToVolt = FULL_SCALE_SPAN_V / maxCount;
+      return FULL_SCALE_MIN_V + counts * countsToVolt;
     }
 
     function setTimeByIndex(index, skipRender) {
@@ -602,11 +626,14 @@ const indexHTML = `<!DOCTYPE html>
     }
 
     function sendTriggerConfig() {
+      state.triggerLevelVolt = parseFloat(controls.level.value);
+      const bits = Math.max(1, state.sampleBits || 8);
+      const levelCounts = voltsToCounts(state.triggerLevelVolt, bits);
       const payload = {
         cmd: 'set_trigger',
         mode: controls.mode.value,
         slope: controls.slope.value,
-        level: Number(controls.level.value),
+        level: levelCounts,
         holdoff_us: Number(controls.holdoff.value),
         channel: Number(controls.channel.value),
       };
@@ -635,8 +662,9 @@ const indexHTML = `<!DOCTYPE html>
         if (v > max) max = v;
       }
       const mid = (min + max) / 2;
-      controls.level.value = Math.round(mid);
-      controls.levelLabel.textContent = controls.level.value;
+      const midVolt = clamp(FULL_SCALE_MIN_V + mid * countsToVolt, FULL_SCALE_MIN_V, FULL_SCALE_MAX_V);
+      controls.level.value = midVolt.toFixed(2);
+      controls.levelLabel.textContent = formatVolt(midVolt);
       controls.mode.value = 'auto';
       controls.slope.value = 'rising';
       const bits = lastMsg.sample_bits || 8;
@@ -644,7 +672,6 @@ const indexHTML = `<!DOCTYPE html>
       const p2pVolt = Math.max((max - min) * countsToVolt, 0.01);
       const targetSpanPerDiv = (p2pVolt * 1.3) / V_DIVS;
       setVoltByIndex(findNearestIndex(VOLT_SCALE, targetSpanPerDiv), true);
-      const midVolt = clamp(FULL_SCALE_MIN_V + mid * countsToVolt, FULL_SCALE_MIN_V, FULL_SCALE_MAX_V);
       controls.voltOffset.value = midVolt.toFixed(2);
       controls.voltOffsetLabel.textContent = midVolt.toFixed(2) + ' V';
       state.voltOffset = midVolt;
@@ -682,14 +709,19 @@ const indexHTML = `<!DOCTYPE html>
         controls.voltOffsetLabel.textContent = state.voltOffset.toFixed(2) + ' V';
         renderCurrentFrame();
       });
-      controls.mode.addEventListener('change', sendTriggerConfig);
+      controls.mode.addEventListener('change', () => {
+        clearTriggerAnchor();
+        sendTriggerConfig();
+        renderCurrentFrame();
+      });
       controls.slope.addEventListener('change', sendTriggerConfig);
       controls.channel.addEventListener('change', () => {
         sendTriggerConfig();
         renderCurrentFrame();
       });
       controls.level.addEventListener('input', () => {
-        controls.levelLabel.textContent = controls.level.value;
+        state.triggerLevelVolt = parseFloat(controls.level.value);
+        controls.levelLabel.textContent = formatVolt(state.triggerLevelVolt);
         sendTriggerConfig();
       });
       controls.holdoff.addEventListener('input', () => {
@@ -726,12 +758,20 @@ const indexHTML = `<!DOCTYPE html>
             lastMsg = msg;
             state.sampleRate = msg.sample_rate || DEFAULT_SAMPLE_RATE;
             state.sampleBits = msg.sample_bits || 8;
-            if (msg.trigger && typeof msg.trigger.index === 'number') {
-              lastTriggerInfo = msg.trigger;
-              lastTriggerAbsIdx = msg.first_idx + msg.trigger.index;
+            lastTriggerInfo = msg.trigger || null;
+            const triggerActive =
+              msg.trigger &&
+              typeof msg.trigger.index === 'number' &&
+              msg.trigger.index >= 0 &&
+              (msg.trigger.state === 'triggered' || msg.trigger.active);
+            if (triggerActive) {
+              if (typeof msg.trigger_abs_idx === 'number') {
+                lastTriggerAbsIdx = msg.trigger_abs_idx;
+              } else {
+                lastTriggerAbsIdx = msg.first_idx + msg.trigger.index;
+              }
             } else {
-              lastTriggerInfo = null;
-              lastTriggerAbsIdx = null;
+              clearTriggerAnchor();
             }
             renderCurrentFrame();
             const trigState = msg.trigger && msg.trigger.state ? msg.trigger.state : 'auto';
@@ -992,6 +1032,13 @@ func (sb *sampleBuffer) appendPacket(h packetHeader, samples [][]uint16, trig tr
 
 	if h.FirstSampleIdx != sb.expectedIdx {
 		if h.FirstSampleIdx > sb.expectedIdx {
+			gap := h.FirstSampleIdx - sb.expectedIdx
+			sb.dropCount += gap
+			log.Printf("capture gap: seq=%d expected_idx=%d got_idx=%d gap=%d drops=%d", h.PacketSeq, sb.expectedIdx, h.FirstSampleIdx, gap, sb.dropCount)
+		} else {
+			log.Printf("capture rewind: seq=%d expected_idx=%d got_idx=%d (resetting buffer)", h.PacketSeq, sb.expectedIdx, h.FirstSampleIdx)
+		}
+		if h.FirstSampleIdx > sb.expectedIdx {
 			sb.dropCount += h.FirstSampleIdx - sb.expectedIdx
 		}
 		sb.reset(h.FirstSampleIdx, len(samples))
@@ -1012,6 +1059,11 @@ func (sb *sampleBuffer) appendPacket(h packetHeader, samples [][]uint16, trig tr
 	if dropped > 0 {
 		sb.startIdx += uint64(dropped)
 		sb.dropCount += uint64(dropped)
+		if len(sb.rings) > 0 && len(sb.rings[0].data) > 0 {
+			log.Printf("ring overflow: seq=%d first_idx=%d dropped=%d cap=%d", h.PacketSeq, h.FirstSampleIdx, dropped, len(sb.rings[0].data))
+		} else {
+			log.Printf("ring overflow: seq=%d first_idx=%d dropped=%d", h.PacketSeq, h.FirstSampleIdx, dropped)
+		}
 	}
 	sb.expectedIdx = h.FirstSampleIdx + uint64(len(samples[0]))
 	sb.sampleBits = h.SampleBits
@@ -1215,6 +1267,15 @@ func (tc *triggerController) Update(upd triggerUpdate) {
 	if upd.Channel >= 0 {
 		tc.cfg.Channel = upd.Channel
 	}
+}
+
+func (tc *triggerController) SetSampleRate(rate float64) {
+	if rate <= 0 {
+		return
+	}
+	tc.mu.Lock()
+	tc.sampleRate = rate
+	tc.mu.Unlock()
 }
 
 func (tc *triggerController) ArmSingle() {
@@ -1450,6 +1511,7 @@ func main() {
 	}
 
 	triggerCtl := newTriggerController()
+	triggerCtl.SetSampleRate(sampleRate)
 
 	hub := newWSHub(*uiFPS, triggerCtl, historySamples, *historySeconds, sampleRate)
 	hub.Start()
