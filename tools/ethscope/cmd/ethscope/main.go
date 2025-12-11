@@ -112,7 +112,7 @@ const indexHTML = `<!DOCTYPE html>
   </div>
   <script>
   (function() {
-    const DEFAULT_SAMPLE_RATE = 1.256e6; // match TIM5 (108 MHz / (ARR+1)=86)
+    const DEFAULT_SAMPLE_RATE = 1.263157e6; // match TIM5 (timer=72 MHz, ARR=56 -> 72e6/(56+1))
     const H_DIVS = 10;
     const V_DIVS = 8;
     const FULL_SCALE_MIN_V = -7.25;
@@ -802,7 +802,7 @@ const indexHTML = `<!DOCTYPE html>
 const (
 	protoHeaderSize  = 0x14
 	defaultPreview   = 8
-	approxSampleRate = 1.256e6 // samples per second per channel (TIM5 @108MHz, ARR=85)
+	approxSampleRate = 1.263157e6 // samples per second per channel (TIM5 timer clk 72MHz, ARR=56)
 	snapshotSamples  = 16384
 	displayPoints    = 2048
 	eventSchemaVer   = 1
