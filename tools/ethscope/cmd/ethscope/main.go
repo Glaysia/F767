@@ -289,6 +289,21 @@ const indexHTML = `<!DOCTYPE html>
       return FULL_SCALE_MIN_V + counts * countsToVolt;
     }
 
+    function findTriggerIndex(samples, levelCounts, slope) {
+      if (!samples || samples.length < 2) return -1;
+      let prev = samples[0];
+      for (let i = 1; i < samples.length; i++) {
+        const val = samples[i];
+        if (slope === 'rising') {
+          if (prev < levelCounts && val >= levelCounts) return i;
+        } else if (slope === 'falling') {
+          if (prev > levelCounts && val <= levelCounts) return i;
+        }
+        prev = val;
+      }
+      return -1;
+    }
+
     function setTimeByIndex(index, skipRender) {
       const idx = clamp(Math.round(index), 0, TIME_SCALE.length - 1);
       state.timeDiv = TIME_SCALE[idx];
@@ -771,7 +786,25 @@ const indexHTML = `<!DOCTYPE html>
                 lastTriggerAbsIdx = msg.first_idx + msg.trigger.index;
               }
             } else {
-              clearTriggerAnchor();
+              // Try client-side edge detection on the latest packet to anchor slow waveforms.
+              const ch = Number(controls.channel.value) || 0;
+              const bits = state.sampleBits || 8;
+              const levelCounts = voltsToCounts(state.triggerLevelVolt, bits);
+              if (msg.samples[ch]) {
+                const idx = findTriggerIndex(msg.samples[ch], levelCounts, controls.slope.value);
+                if (idx >= 0) {
+                  lastTriggerAbsIdx = msg.first_idx + idx;
+                  lastTriggerInfo = {
+                    channel: ch,
+                    level: levelCounts,
+                    mode: controls.mode.value,
+                    slope: controls.slope.value,
+                    state: 'client-detected',
+                    active: true,
+                    index: idx,
+                  };
+                }
+              }
             }
             renderCurrentFrame();
             const trigState = msg.trigger && msg.trigger.state ? msg.trigger.state : 'auto';
@@ -1212,6 +1245,28 @@ func minMaxDownsample(samples []uint16, maxPoints int) ([]uint16, []uint16) {
 		maxs[i] = maxVal
 	}
 	return mins, maxs
+}
+
+func findTriggerIndex(samples []uint16, level uint16, slope triggerSlope) int {
+	if len(samples) == 0 {
+		return -1
+	}
+	prev := samples[0]
+	for i := 1; i < len(samples); i++ {
+		val := samples[i]
+		switch slope {
+		case triggerSlopeRising:
+			if prev < level && val >= level {
+				return i
+			}
+		case triggerSlopeFalling:
+			if prev > level && val <= level {
+				return i
+			}
+		}
+		prev = val
+	}
+	return -1
 }
 
 func newTriggerController() *triggerController {
@@ -1786,6 +1841,30 @@ func (h *wsHub) broadcastLatest() {
 	}
 	if version == h.lastBroadcast.Load() {
 		return
+	}
+
+	if h.trigger != nil && evt.Trigger.Index == -1 {
+		cfg := h.trigger.Config()
+		ch := cfg.Channel
+		if ch >= 0 && ch < len(evt.Samples) {
+			bits := evt.SampleBits
+			if bits == 0 {
+				bits = 8
+			}
+			maxValue := (1 << bits) - 1
+			level := uint16((int(cfg.Level) * maxValue) / 255)
+			idx := findTriggerIndex(evt.Samples[ch], level, cfg.Slope)
+			if idx >= 0 {
+				evt.Trigger.Index = idx
+				evt.Trigger.Channel = ch
+				evt.Trigger.Level = level
+				evt.Trigger.Mode = string(cfg.Mode)
+				evt.Trigger.Slope = string(cfg.Slope)
+				evt.Trigger.State = "postproc"
+				evt.Trigger.Active = true
+				evt.TriggerAbsIdx = evt.FirstSampleIdx + uint64(idx)
+			}
+		}
 	}
 
 	h.mu.Lock()
