@@ -246,7 +246,17 @@ const indexHTML = `<!DOCTYPE html>
       state.timeDiv = TIME_SCALE[idx];
       controls.timeRange.value = idx;
       controls.timeLabel.textContent = formatTimeDivLabel(state.timeDiv);
+      requestViewSpan();
       if (!skipRender) renderCurrentFrame();
+    }
+
+    function requestViewSpan() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      const windowSeconds = state.timeDiv * 1e-6 * H_DIVS;
+      const samples = Math.max(1, Math.floor(windowSeconds * state.sampleRate));
+      ws.send(JSON.stringify({ cmd: 'set_view', samples }));
     }
 
     function setVoltByIndex(index, skipRender) {
@@ -385,7 +395,7 @@ const indexHTML = `<!DOCTYPE html>
     function drawAxes() {
       ctx.fillStyle = '#020611';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.75)';
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 6]);
       for (let i = 1; i < H_DIVS; i++) {
@@ -403,6 +413,19 @@ const indexHTML = `<!DOCTYPE html>
         ctx.stroke();
       }
       ctx.setLineDash([]);
+      // Axis lines
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 1;
+      const midX = canvas.width / 2;
+      const midY = canvas.height / 2;
+      ctx.beginPath();
+      ctx.moveTo(midX, 0);
+      ctx.lineTo(midX, canvas.height);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, midY);
+      ctx.lineTo(canvas.width, midY);
+      ctx.stroke();
     }
 
     function renderCurrentFrame() {
@@ -414,46 +437,41 @@ const indexHTML = `<!DOCTYPE html>
       const maxCount = (1 << bits) - 1;
       const windowSeconds = state.timeDiv * 1e-6 * H_DIVS;
       const neededSamples = Math.max(1, Math.floor(windowSeconds * state.sampleRate));
-      let minV = state.voltOffset - (state.voltDiv * V_DIVS) / 2;
-      let maxV = state.voltOffset + (state.voltDiv * V_DIVS) / 2;
-      if (minV < 0) {
-        maxV = clamp(maxV - minV, 0, FULL_SCALE_V);
-        minV = 0;
-      }
-      if (maxV > FULL_SCALE_V) {
-        minV = clamp(minV - (maxV - FULL_SCALE_V), 0, FULL_SCALE_V);
-        maxV = FULL_SCALE_V;
-      }
+      const minV = state.voltOffset - (state.voltDiv * V_DIVS) / 2;
+      const maxV = state.voltOffset + (state.voltDiv * V_DIVS) / 2;
       const spanV = Math.max(0.01, maxV - minV);
       const trigChannel = lastTriggerInfo ? lastTriggerInfo.channel : null;
       const trigLevelCounts = lastTriggerInfo ? lastTriggerInfo.level : null;
 
       let windowStartIdx = null;
 
-      ring.buffers.forEach((buf, ch) => {
-        if (buf.size === 0) {
-          return;
-        }
-
-        if (windowStartIdx === null) {
-          const latestStart = buf.endIdx - neededSamples;
-          const triggerIdx = typeof lastTriggerAbsIdx === 'number' ? lastTriggerAbsIdx : null;
-          if (triggerIdx !== null) {
-            windowStartIdx = triggerIdx - Math.floor(neededSamples / 2);
-          } else {
-            windowStartIdx = latestStart;
+        ring.buffers.forEach((buf, ch) => {
+          if (buf.size === 0) {
+            return;
           }
-        }
 
-        const snapshot = ringRange(buf, windowStartIdx, neededSamples);
+          if (windowStartIdx === null) {
+            const latestStart = buf.endIdx - neededSamples;
+            const triggerIdx = typeof lastTriggerAbsIdx === 'number' ? lastTriggerAbsIdx : null;
+            if (triggerIdx !== null) {
+              windowStartIdx = triggerIdx - Math.floor(neededSamples / 2);
+            } else {
+              windowStartIdx = latestStart;
+            }
+          }
+
+          const snapshot = ringRange(buf, windowStartIdx, neededSamples);
         if (!snapshot.data.length) {
           return;
         }
         const ds = downsample(snapshot.data, MAX_DISPLAY_POINTS);
         const points = ds.mins.length;
         if (points) {
-          ctx.strokeStyle = CHANNEL_COLORS[ch % CHANNEL_COLORS.length];
-          ctx.lineWidth = 1.5;
+          const color = CHANNEL_COLORS[ch % CHANNEL_COLORS.length];
+          ctx.save();
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = 0.35;
+          ctx.lineWidth = 1;
           for (let idx = 0; idx < points; idx++) {
             const x = (idx / (points - 1 || 1)) * canvas.width;
             const voltMin = (ds.mins[idx] / maxCount) * FULL_SCALE_V;
@@ -467,6 +485,21 @@ const indexHTML = `<!DOCTYPE html>
             ctx.lineTo(x, yMin);
             ctx.stroke();
           }
+          ctx.restore();
+
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          for (let idx = 0; idx < points; idx++) {
+            const x = (idx / (points - 1 || 1)) * canvas.width;
+            const mid = (ds.mins[idx] + ds.maxs[idx]) / 2;
+            const volt = (mid / maxCount) * FULL_SCALE_V;
+            const norm = clamp((volt - minV) / spanV, 0, 1);
+            const y = canvas.height - norm * canvas.height;
+            if (idx === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
         }
 
         if (trigChannel === ch && typeof trigLevelCounts === 'number') {
@@ -616,6 +649,7 @@ const indexHTML = `<!DOCTYPE html>
           reconnectTimer = null;
         }
         sendTriggerConfig();
+        requestViewSpan();
       };
       ws.onmessage = (event) => {
         try {
@@ -734,6 +768,7 @@ type wsCommand struct {
 	Level     float64 `json:"level,omitempty"`
 	HoldoffUs float64 `json:"holdoff_us,omitempty"`
 	Channel   int     `json:"channel,omitempty"`
+	Samples   int     `json:"samples,omitempty"`
 }
 
 type packetEvent struct {
@@ -830,7 +865,7 @@ type sampleBuffer struct {
 	ingestLagUs      uint64
 }
 
-func newSampleBuffer(channels int, capacity int, historySeconds float64) *sampleBuffer {
+func newSampleBuffer(channels int, capacity int, historySeconds float64, sampleRate float64) *sampleBuffer {
 	if channels <= 0 {
 		channels = 1
 	}
@@ -846,7 +881,7 @@ func newSampleBuffer(channels int, capacity int, historySeconds float64) *sample
 		startIdx:       0,
 		sampleBits:     8,
 		channels:       uint16(channels),
-		sampleRate:     approxSampleRate,
+		sampleRate:     sampleRate,
 		ringCapacity:   capacity,
 		historySeconds: historySeconds,
 	}
@@ -871,7 +906,7 @@ func (sb *sampleBuffer) reset(startIdx uint64, channels int) {
 	sb.version.Add(1)
 }
 
-func (sb *sampleBuffer) appendPacket(h packetHeader, samples [][]uint16, trig triggerInfo, ingestDelay time.Duration) error {
+func (sb *sampleBuffer) appendPacket(h packetHeader, samples [][]uint16, trig triggerInfo, ingestDelay time.Duration, sampleRate float64) error {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
@@ -917,7 +952,11 @@ func (sb *sampleBuffer) appendPacket(h packetHeader, samples [][]uint16, trig tr
 	sb.lastSeq = h.PacketSeq
 	sb.lastFlags = h.Flags
 	sb.samplesPerPacket = h.SamplesPerCh
-	sb.sampleRate = approxSampleRate
+	if sampleRate > 0 {
+		sb.sampleRate = sampleRate
+	} else {
+		sb.sampleRate = approxSampleRate
+	}
 	sb.lastTrigger = trig
 	sb.lastTriggerAbs = 0
 	if trig.Active && trig.Index >= 0 {
@@ -1244,9 +1283,10 @@ type wsHub struct {
 	trigger       *triggerController
 	buffer        *sampleBuffer
 	snapshotSize  int
+	sampleRate    float64
 }
 
-func newWSHub(fps int, trigger *triggerController, historySamples int, historySeconds float64) *wsHub {
+func newWSHub(fps int, trigger *triggerController, historySamples int, historySeconds float64, sampleRate float64) *wsHub {
 	if fps <= 0 {
 		fps = 30
 	}
@@ -1267,9 +1307,28 @@ func newWSHub(fps int, trigger *triggerController, historySamples int, historySe
 		frameInterval: interval,
 		writeTimeout:  500 * time.Millisecond,
 		trigger:       trigger,
-		buffer:        newSampleBuffer(1, historySamples, historySeconds),
+		buffer:        newSampleBuffer(1, historySamples, historySeconds, sampleRate),
 		snapshotSize:  snapshotSamples,
+		sampleRate:    sampleRate,
 	}
+}
+
+func (h *wsHub) updateSnapshotSize(samples int) {
+	if samples <= 0 {
+		return
+	}
+	if h.buffer == nil {
+		return
+	}
+	maxSamples := h.buffer.ringCapacity
+	if samples > maxSamples {
+		samples = maxSamples
+	}
+	const minSamples = snapshotSamples
+	if samples < minSamples {
+		samples = minSamples
+	}
+	h.snapshotSize = samples
 }
 
 func (h *wsHub) Start() {
@@ -1288,7 +1347,7 @@ func (h *wsHub) appendPacket(hdr packetHeader, samples [][]uint16, trig triggerI
 	if h.buffer == nil {
 		return
 	}
-	if err := h.buffer.appendPacket(hdr, samples, trig, ingestDelay); err != nil {
+	if err := h.buffer.appendPacket(hdr, samples, trig, ingestDelay, h.sampleRate); err != nil {
 		log.Printf("buffer append failed seq=%d: %v", hdr.PacketSeq, err)
 	}
 }
@@ -1300,6 +1359,7 @@ func main() {
 	uiFPS := flag.Int("ui-fps", 60, "maximum WebSocket frame rate (frames per second)")
 	historySeconds := flag.Float64("history", 20, "capture history to keep per channel (seconds)")
 	ingestQueue := flag.Int("ingest-q", 64, "UDP ingest queue length before processing")
+	sampleRateFlag := flag.Float64("sample-rate", approxSampleRate, "per-channel ADC sample rate (samples per second)")
 	flag.Parse()
 
 	if *historySeconds <= 0 {
@@ -1310,13 +1370,21 @@ func main() {
 	if historySamples < snapshotSamples {
 		historySamples = snapshotSamples
 	}
+	const maxSamplesCap = 100_000_000 // ~100M samples per channel (~200 MB @ uint16)
+	if historySamples > maxSamplesCap {
+		historySamples = maxSamplesCap
+	}
 	if *ingestQueue < 1 {
 		*ingestQueue = 1
+	}
+	sampleRate := *sampleRateFlag
+	if sampleRate <= 0 {
+		sampleRate = approxSampleRate
 	}
 
 	triggerCtl := newTriggerController()
 
-	hub := newWSHub(*uiFPS, triggerCtl, historySamples, *historySeconds)
+	hub := newWSHub(*uiFPS, triggerCtl, historySamples, *historySeconds, sampleRate)
 	hub.Start()
 
 	captureJobs := make(chan captureJob, *ingestQueue)
@@ -1678,6 +1746,8 @@ func (h *wsHub) handleCommand(data []byte) {
 		h.trigger.Update(update)
 	case "arm_single":
 		h.trigger.ArmSingle()
+	case "set_view":
+		h.updateSnapshotSize(cmd.Samples)
 	default:
 		log.Printf("ws unknown command: %s", cmd.Cmd)
 	}
