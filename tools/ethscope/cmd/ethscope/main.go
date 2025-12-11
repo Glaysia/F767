@@ -65,8 +65,8 @@ const indexHTML = `<!DOCTYPE html>
         <div class="hint small">10 mV/div ~ 10 V/div</div>
       </div>
       <div class="control">
-        <label for="volt-offset">전압 오프셋 (V) <span class="inline-value" id="volt-offset-value">1.65 V</span></label>
-        <input type="range" id="volt-offset" min="0" max="3.3" step="0.05" value="1.65" />
+        <label for="volt-offset">전압 오프셋 (V) <span class="inline-value" id="volt-offset-value">0.00 V</span></label>
+        <input type="range" id="volt-offset" min="-7.25" max="7.25" step="0.05" value="0" />
       </div>
       <div class="control">
         <label for="trigger-mode">트리거 모드</label>
@@ -112,10 +112,12 @@ const indexHTML = `<!DOCTYPE html>
   </div>
   <script>
   (function() {
-    const DEFAULT_SAMPLE_RATE = 2.4e6;
+    const DEFAULT_SAMPLE_RATE = 1.256e6; // match TIM5 (108 MHz / (ARR+1)=86)
     const H_DIVS = 10;
     const V_DIVS = 8;
-    const FULL_SCALE_V = 3.3;
+    const FULL_SCALE_MIN_V = -7.25;
+    const FULL_SCALE_MAX_V = 7.25;
+    const FULL_SCALE_SPAN_V = FULL_SCALE_MAX_V - FULL_SCALE_MIN_V;
     const RING_CAPACITY = 500000;
     const MAX_DISPLAY_POINTS = 2048;
     const CHANNEL_COLORS = ['#ffd447', '#4fb7ff', '#8df5ff', '#ff7ceb'];
@@ -230,6 +232,29 @@ const indexHTML = `<!DOCTYPE html>
         return value.toFixed(2) + ' V/div';
       }
       return (value * 1000).toFixed(0) + ' mV/div';
+    }
+
+    function formatVoltTick(value) {
+      const abs = Math.abs(value);
+      if (abs >= 10) return value.toFixed(0) + ' V';
+      if (abs >= 1) return value.toFixed(1) + ' V';
+      if (abs >= 0.1) return value.toFixed(2) + ' V';
+      return (value * 1000).toFixed(0) + ' mV';
+    }
+
+    function formatTimeTick(microseconds) {
+      const abs = Math.abs(microseconds);
+      if (abs >= 1e6) {
+        const seconds = microseconds / 1e6;
+        return seconds.toFixed(abs >= 1e7 ? 0 : 2) + ' s';
+      }
+      if (abs >= 1000) {
+        const ms = microseconds / 1000;
+        const precision = ms >= 100 ? 0 : ms >= 10 ? 1 : 2;
+        return ms.toFixed(precision) + ' ms';
+      }
+      const precision = abs >= 100 ? 0 : abs >= 10 ? 1 : 2;
+      return microseconds.toFixed(precision) + ' µs';
     }
 
     function setStatus(text) {
@@ -434,6 +459,7 @@ const indexHTML = `<!DOCTYPE html>
       }
       const bits = Math.max(1, state.sampleBits || 8);
       const maxCount = (1 << bits) - 1;
+      const countsToVolt = FULL_SCALE_SPAN_V / maxCount;
       const windowSeconds = state.timeDiv * 1e-6 * H_DIVS;
       const neededSamples = Math.max(1, Math.floor(windowSeconds * state.sampleRate));
       const minV = state.voltOffset - (state.voltDiv * V_DIVS) / 2;
@@ -473,8 +499,8 @@ const indexHTML = `<!DOCTYPE html>
           ctx.lineWidth = 1;
           for (let idx = 0; idx < points; idx++) {
             const x = (idx / (points - 1 || 1)) * canvas.width;
-            const voltMin = (ds.mins[idx] / maxCount) * FULL_SCALE_V;
-            const voltMax = (ds.maxs[idx] / maxCount) * FULL_SCALE_V;
+            const voltMin = FULL_SCALE_MIN_V + ds.mins[idx] * countsToVolt;
+            const voltMax = FULL_SCALE_MIN_V + ds.maxs[idx] * countsToVolt;
             const normMin = clamp((voltMin - minV) / spanV, 0, 1);
             const normMax = clamp((voltMax - minV) / spanV, 0, 1);
             const yMin = canvas.height - normMin * canvas.height;
@@ -492,7 +518,7 @@ const indexHTML = `<!DOCTYPE html>
           for (let idx = 0; idx < points; idx++) {
             const x = (idx / (points - 1 || 1)) * canvas.width;
             const mid = (ds.mins[idx] + ds.maxs[idx]) / 2;
-            const volt = (mid / maxCount) * FULL_SCALE_V;
+            const volt = FULL_SCALE_MIN_V + mid * countsToVolt;
             const norm = clamp((volt - minV) / spanV, 0, 1);
             const y = canvas.height - norm * canvas.height;
             if (idx === 0) ctx.moveTo(x, y);
@@ -502,7 +528,7 @@ const indexHTML = `<!DOCTYPE html>
         }
 
         if (trigChannel === ch && typeof trigLevelCounts === 'number') {
-          const trigVolt = (trigLevelCounts / maxCount) * FULL_SCALE_V;
+          const trigVolt = FULL_SCALE_MIN_V + trigLevelCounts * countsToVolt;
           if (trigVolt >= minV && trigVolt <= maxV) {
             const norm = clamp((trigVolt - minV) / spanV, 0, 1);
             const y = canvas.height - norm * canvas.height;
@@ -531,6 +557,48 @@ const indexHTML = `<!DOCTYPE html>
           }
         }
       });
+
+      drawGridLabels(minV, maxV);
+      drawScaleLabels();
+    }
+
+    function drawGridLabels(minV, maxV) {
+      const labelColor = CHANNEL_COLORS[0] || '#ffd447';
+      ctx.save();
+      ctx.fillStyle = labelColor;
+      ctx.font = '11px "Segoe UI", "Pretendard", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const padding = 6;
+      for (let i = 0; i <= V_DIVS; i++) {
+        const y = (canvas.height / V_DIVS) * i;
+        const v = maxV - i * state.voltDiv;
+        ctx.fillText(formatVoltTick(v), padding, y);
+      }
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      const bottomPadding = 6;
+      const halfDivs = H_DIVS / 2;
+      for (let i = 0; i <= H_DIVS; i++) {
+        const x = (canvas.width / H_DIVS) * i;
+        const tUs = (i - halfDivs) * state.timeDiv;
+        ctx.fillText(formatTimeTick(tUs), x, canvas.height - bottomPadding);
+      }
+      ctx.restore();
+    }
+
+    function drawScaleLabels() {
+      ctx.save();
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.font = '12px "Segoe UI", "Pretendard", sans-serif';
+      ctx.textBaseline = 'bottom';
+      const padding = 10;
+      const timeText = formatTimeDivLabel(state.timeDiv);
+      const voltText = formatVoltDivLabel(state.voltDiv);
+      ctx.fillText(timeText, padding, canvas.height - padding - 14);
+      ctx.fillText(voltText, padding, canvas.height - padding);
+      ctx.restore();
     }
 
     function sendTriggerConfig() {
@@ -572,11 +640,11 @@ const indexHTML = `<!DOCTYPE html>
       controls.mode.value = 'auto';
       controls.slope.value = 'rising';
       const bits = lastMsg.sample_bits || 8;
-      const countsToVolt = FULL_SCALE_V / ((1 << bits) - 1 || 255);
+      const countsToVolt = FULL_SCALE_SPAN_V / ((1 << bits) - 1 || 255);
       const p2pVolt = Math.max((max - min) * countsToVolt, 0.01);
       const targetSpanPerDiv = (p2pVolt * 1.3) / V_DIVS;
       setVoltByIndex(findNearestIndex(VOLT_SCALE, targetSpanPerDiv), true);
-      const midVolt = clamp(mid * countsToVolt, 0, FULL_SCALE_V);
+      const midVolt = clamp(FULL_SCALE_MIN_V + mid * countsToVolt, FULL_SCALE_MIN_V, FULL_SCALE_MAX_V);
       controls.voltOffset.value = midVolt.toFixed(2);
       controls.voltOffsetLabel.textContent = midVolt.toFixed(2) + ' V';
       state.voltOffset = midVolt;
@@ -694,7 +762,7 @@ const indexHTML = `<!DOCTYPE html>
 const (
 	protoHeaderSize  = 0x14
 	defaultPreview   = 8
-	approxSampleRate = 2.4e6 // samples per second per channel
+	approxSampleRate = 1.256e6 // samples per second per channel (TIM5 @108MHz, ARR=85)
 	snapshotSamples  = 16384
 	displayPoints    = 2048
 	eventSchemaVer   = 1
@@ -775,7 +843,7 @@ type packetEvent struct {
 	FirstSampleIdx uint64      `json:"first_idx"`
 	SampleRate     float64     `json:"sample_rate"`
 	Channels       uint16      `json:"channels"`
-	SamplesPerCh   uint16      `json:"samples_per_ch"`
+	SamplesPerCh   int         `json:"samples_per_ch"`
 	SampleBits     uint16      `json:"sample_bits"`
 	Flags          uint16      `json:"flags"`
 	Samples        [][]uint16  `json:"samples"`
@@ -1005,8 +1073,8 @@ func (sb *sampleBuffer) snapshot(maxSamples int) (packetEvent, uint64, bool) {
 		if len(chSamples) == 0 {
 			continue
 		}
-		if evt.SamplesPerCh == 0 || uint16(len(chSamples)) < evt.SamplesPerCh {
-			evt.SamplesPerCh = uint16(len(chSamples))
+		if evt.SamplesPerCh == 0 || len(chSamples) < evt.SamplesPerCh {
+			evt.SamplesPerCh = len(chSamples)
 		}
 	}
 
@@ -1016,17 +1084,17 @@ func (sb *sampleBuffer) snapshot(maxSamples int) (packetEvent, uint64, bool) {
 
 	// Align all channels to the shortest snapshot to keep time bases consistent.
 	for ch, s := range evt.Samples {
-		if len(s) > int(evt.SamplesPerCh) {
-			evt.Samples[ch] = s[len(s)-int(evt.SamplesPerCh):]
+		if len(s) > evt.SamplesPerCh {
+			evt.Samples[ch] = s[len(s)-evt.SamplesPerCh:]
 		}
 	}
 
 	if len(sb.rings) > 0 {
 		currentSize := sb.rings[0].size
-		if currentSize < int(evt.SamplesPerCh) {
+		if currentSize < evt.SamplesPerCh {
 			evt.FirstSampleIdx = firstIdx
 		} else {
-			offset := currentSize - int(evt.SamplesPerCh)
+			offset := currentSize - evt.SamplesPerCh
 			evt.FirstSampleIdx = firstIdx + uint64(offset)
 		}
 	} else {
