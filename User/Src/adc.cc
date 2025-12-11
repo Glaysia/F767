@@ -7,8 +7,7 @@ extern "C" {
 
 extern ADC_HandleTypeDef hadc1;
 extern ADC_HandleTypeDef hadc3;
-extern TIM_HandleTypeDef htim3;
-extern TIM_HandleTypeDef htim5;
+extern TIM_HandleTypeDef htim8;
 void Error_Handler(void);
 }
 
@@ -86,11 +85,7 @@ void AdcHandler::StartDma(void)
     {
         Error_Handler();
     }
-    if (HAL_TIM_Base_Start(&htim3) != HAL_OK)
-    {
-        Error_Handler();
-    }
-    if (HAL_TIM_OC_Start(&htim3, TIM_CHANNEL_4) != HAL_OK)
+    if (HAL_TIM_Base_Start(&htim8) != HAL_OK)
     {
         Error_Handler();
     }
