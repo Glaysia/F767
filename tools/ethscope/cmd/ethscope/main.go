@@ -2179,7 +2179,7 @@ func main() {
 
 	addr := *listen
 	if strings.HasPrefix(addr, ":") {
-		addr = "localhost" + addr
+		addr = "0.0.0.0" + addr
 	}
 
 	fgStatus := "disabled"
