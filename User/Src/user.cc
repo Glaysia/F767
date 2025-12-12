@@ -15,8 +15,6 @@
 extern "C" {
 
 extern UART_HandleTypeDef huart3;
-extern UART_HandleTypeDef huart4;
-
 
 int __io_putchar(int ch)
 {

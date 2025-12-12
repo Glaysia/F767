@@ -211,7 +211,7 @@ const indexHTML = `<!DOCTYPE html>
 
     <div id="tab-fg" class="tab-pane">
       <h1>함수 발생기 컨트롤</h1>
-      <p>PC→MCU1(이더넷)→UART4→MCU2(FG) 릴레이 경로를 사용합니다. UART 115200/8/N/1, 명령은 UART.md 표준을 그대로 보냅니다.</p>
+      <p>PC→MCU1(이더넷)→UART2→MCU2(FG) 릴레이 경로를 사용합니다. UART 115200/8/N/1, 명령은 UART.md 표준을 그대로 보냅니다.</p>
       <div class="fg-grid">
         <div class="fg-card">
           <div class="control">
@@ -265,7 +265,7 @@ const indexHTML = `<!DOCTYPE html>
         </div>
       </div>
       <div class="fg-status" id="fg-status">대기: WebSocket 연결 후 명령을 보낼 수 있습니다.</div>
-      <p class="hint small">UART4 TX=PC10, RX=PC11 (115200/8/N/1). 명령은 자동으로 LF로 끝납니다.</p>
+      <p class="hint small">UART2 TX=PD5, RX=PA3 (115200/8/N/1). 명령은 자동으로 LF로 끝납니다.</p>
     </div>
   </div>
   <script>

@@ -1,7 +1,7 @@
 # UART Function Generator Interface
 
 ## Serial Settings
-- Port: `UART4` (PC10 → TX, PC11 → RX), interrupt-driven RX.
+- Port: `USART2` (PD5 → TX, PA3 → RX), interrupt-driven RX.
 - Baud: `115200`, data bits: `8`, parity: `None`, stop bits: `1`, flow control: `None`.
 - Firmware prints:
   ````
@@ -12,7 +12,7 @@
 - Commands are buffered until `\r` or `\n`.
 
 ### Network Relay
-- MCU1 수신 포트: UDP `6001` (`fg-addr` 플래그로 변경 가능). 페이로드는 위 명령 문자열을 그대로 담아 전송하면 MCU1이 UART4로 릴레이한다.
+- MCU1 수신 포트: UDP `6001` (`fg-addr` 플래그로 변경 가능). 페이로드는 위 명령 문자열을 그대로 담아 전송하면 MCU1이 UART2로 릴레이한다.
 
 ## Command Summary
 | Command    | Description                                 | Response (success)                | Notes                      |
@@ -32,7 +32,7 @@
 
 ## Usage Tips
 1. Configure your terminal to `115200/8/N/1`, no flow control.
-2. Connect PA0→RX of PC, PC11→TX of PC (crossed).
+2. Connect PD5→RX of FG, PA3→TX of FG (crossed).
 3. Type commands followed immediately by the numeric argument (no spaces), press Enter.
 4. Wait for the acknowledgment string before issuing the next command.
 5. If output behaves oddly, send `D` to confirm current parameters or `H` to re-read the command list.

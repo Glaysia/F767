@@ -1,6 +1,7 @@
 #include "fg_relay.h"
 
 #include <string.h>
+#include <stdio.h>
 
 #include "main.h"
 
@@ -16,7 +17,7 @@ enum
     kFgMaxPayload = 128U
 };
 
-extern UART_HandleTypeDef huart4;
+extern UART_HandleTypeDef huart2;
 
 static struct udp_pcb *g_fg_pcb = NULL;
 
@@ -53,7 +54,7 @@ static void FgRelay_HandleUdp(void *arg, struct udp_pcb *pcb, struct pbuf *p, co
         tx_len++;
     }
 
-    (void)HAL_UART_Transmit(&huart4, buffer, tx_len, kFgUartTimeoutMs);
+    (void)HAL_UART_Transmit(&huart2, buffer, tx_len, kFgUartTimeoutMs);
 
     pbuf_free(p);
 }
@@ -69,12 +70,14 @@ void FgRelay_Init(void)
     g_fg_pcb = udp_new();
     if (g_fg_pcb == NULL)
     {
+        printf("fg: udp_new failed (pcb limit?)\r\n");
         return;
     }
 
     const err_t bind = udp_bind(g_fg_pcb, IP_ADDR_ANY, kFgCtrlPort);
     if (bind != ERR_OK)
     {
+        printf("fg: udp_bind failed (%d)\r\n", bind);
         udp_remove(g_fg_pcb);
         g_fg_pcb = NULL;
         return;

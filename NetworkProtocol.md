@@ -68,4 +68,4 @@ Offset  Size  Field             Description
 ## Function Generator Relay
 - **Transport:** UDP ASCII control.
 - **Destination:** MCU1 `192.168.10.2:6001` (default, overridable via `--fg-addr` on the host UI).
-- **Payload:** UART.md 명령 문자열을 그대로 보냄 (`F1000`, `A2048`, `W0`, `D`, `H` 등). MCU1이 UART4(115200/8/N/1, TX=PC10, RX=PC11)로 전달한다.
+- **Payload:** UART.md 명령 문자열을 그대로 보냄 (`F1000`, `A2048`, `W0`, `D`, `H` 등). MCU1이 UART2(115200/8/N/1, TX=PD5, RX=PA3)로 전달한다.
